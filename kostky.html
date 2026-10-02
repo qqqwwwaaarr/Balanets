@@ -1,1599 +1,1086 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Volume2,
-  VolumeX,
-  RotateCcw,
-  Sparkles,
-  Dices,
-  Lock,
-  Unlock,
-  Shuffle,
-  Info,
-  History,
-  Trash2,
-  BarChart3,
-  Award,
-  TrendingUp,
-  Palette,
-  Check,
-} from 'lucide-react';
-
-/* ==========================================================================
-   1. TYPES & DATA STRUCTURES
-   ========================================================================== */
-
-export interface PastelPalette {
-  id: string;
-  name: string;
-  bgGradient: string;
-  cardBg: string;
-  diceBg: string;
-  diceBorder: string;
-  pipColor: string;
-  shadowColor: string;
-  accent: string;
-}
-
-export const PASTEL_THEMES: PastelPalette[] = [
-  {
-    id: 'rainbow',
-    name: 'Duhové pastelky',
-    bgGradient: 'from-[#FFF5F5] via-[#F0FDF4] to-[#EFF6FF]',
-    cardBg: '#FFFFFF',
-    diceBg: '#FFFFFF',
-    diceBorder: '#E2E8F0',
-    pipColor: '#334155',
-    shadowColor: 'rgba(148, 163, 184, 0.25)',
-    accent: '#8B5CF6',
-  },
-  {
-    id: 'rose',
-    name: 'Pudrová růže',
-    bgGradient: 'from-[#FFF1F2] via-[#FFE4E6] to-[#FFF5F7]',
-    cardBg: '#FFFFFF',
-    diceBg: '#FFF1F2',
-    diceBorder: '#FECDD3',
-    pipColor: '#BE123C',
-    shadowColor: 'rgba(251, 113, 133, 0.22)',
-    accent: '#FB7185',
-  },
-  {
-    id: 'mint',
-    name: 'Šalvěj & Máta',
-    bgGradient: 'from-[#F0FDF4] via-[#DCFCE7] to-[#F7FEE7]',
-    cardBg: '#FFFFFF',
-    diceBg: '#F0FDF4',
-    diceBorder: '#BBF7D0',
-    pipColor: '#15803D',
-    shadowColor: 'rgba(74, 222, 128, 0.22)',
-    accent: '#22C55E',
-  },
-  {
-    id: 'lavender',
-    name: 'Něžný šeřík',
-    bgGradient: 'from-[#FAF5FF] via-[#F3E8FF] to-[#F5F3FF]',
-    cardBg: '#FFFFFF',
-    diceBg: '#FAF5FF',
-    diceBorder: '#E9D5FF',
-    pipColor: '#7E22CE',
-    shadowColor: 'rgba(192, 132, 252, 0.22)',
-    accent: '#A855F7',
-  },
-  {
-    id: 'peach',
-    name: 'Broskvový sorbet',
-    bgGradient: 'from-[#FFF7ED] via-[#FFEDD5] to-[#FEF3C7]',
-    cardBg: '#FFFFFF',
-    diceBg: '#FFF7ED',
-    diceBorder: '#FED7AA',
-    pipColor: '#C2410C',
-    shadowColor: 'rgba(251, 146, 60, 0.22)',
-    accent: '#F97316',
-  },
-  {
-    id: 'sky',
-    name: 'Nebeský azur',
-    bgGradient: 'from-[#F0F9FF] via-[#E0F2FE] to-[#F0FDFA]',
-    cardBg: '#FFFFFF',
-    diceBg: '#F0F9FF',
-    diceBorder: '#BAE6FD',
-    pipColor: '#0369A1',
-    shadowColor: 'rgba(56, 189, 248, 0.22)',
-    accent: '#0EA5E9',
-  },
-  {
-    id: 'butter',
-    name: 'Vanilkový krém',
-    bgGradient: 'from-[#FEFCE8] via-[#FEF9C3] to-[#FFFBEB]',
-    cardBg: '#FFFFFF',
-    diceBg: '#FEFCE8',
-    diceBorder: '#FEF08A',
-    pipColor: '#A16207',
-    shadowColor: 'rgba(250, 204, 21, 0.22)',
-    accent: '#EAB308',
-  },
-];
-
-export const INDIVIDUAL_DICE_PASTELS = [
-  { bg: '#FFF1F2', border: '#FECDD3', pip: '#BE123C', name: 'Růžová' },
-  { bg: '#F0FDF4', border: '#BBF7D0', pip: '#15803D', name: 'Mátová' },
-  { bg: '#FAF5FF', border: '#E9D5FF', pip: '#7E22CE', name: 'Šeříková' },
-  { bg: '#FFF7ED', border: '#FED7AA', pip: '#C2410C', name: 'Broskvová' },
-  { bg: '#F0F9FF', border: '#BAE6FD', pip: '#0369A1', name: 'Nebeská' },
-  { bg: '#FEFCE8', border: '#FEF08A', pip: '#A16207', name: 'Vanilková' },
-];
-
-export interface DieState {
-  id: string;
-  value: number;
-  isLocked: boolean;
-  rotX: number;
-  rotY: number;
-  rotZ: number;
-}
-
-export interface RollRecord {
-  id: string;
-  timestamp: string;
-  values: number[];
-  sum: number;
-  isMax: boolean;
-  isMin: boolean;
-  isSame: boolean;
-}
-
-export type DisplayStyle = 'pips' | 'numbers' | 'roman';
-
-const FACE_ROTATIONS: Record<number, { x: number; y: number }> = {
-  1: { x: 0, y: 0 },
-  6: { x: 0, y: 180 },
-  2: { x: -90, y: 0 },
-  5: { x: 90, y: 0 },
-  3: { x: 0, y: -90 },
-  4: { x: 0, y: 90 },
-};
-
-const ROMAN_NUMERALS: Record<number, string> = {
-  1: 'I',
-  2: 'II',
-  3: 'III',
-  4: 'IV',
-  5: 'V',
-  6: 'VI',
-};
-
-/* ==========================================================================
-   2. WEB AUDIO SYNTHESIZER (ZERO EXTERNAL ASSETS)
-   ========================================================================== */
-
-class DiceSoundEngine {
-  private ctx: AudioContext | null = null;
-  private isMuted: boolean = false;
-
-  private initCtx() {
-    if (!this.ctx && typeof window !== 'undefined') {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
-      }
-    }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
-  }
-
-  public setMuted(muted: boolean) {
-    this.isMuted = muted;
-  }
-
-  public getMuted(): boolean {
-    return this.isMuted;
-  }
-
-  public toggleMute(): boolean {
-    this.isMuted = !this.isMuted;
-    return this.isMuted;
-  }
-
-  public playDiceBounce(pitchMultiplier: number = 1.0, volume: number = 0.4) {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    const filter = this.ctx.createBiquadFilter();
-
-    const baseFreq = (380 + Math.random() * 120) * pitchMultiplier;
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(baseFreq, t);
-    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.4, t + 0.05);
-
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(baseFreq * 1.5, t);
-    filter.Q.setValueAtTime(3.0, t);
-
-    gain.gain.setValueAtTime(volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc.start(t);
-    osc.stop(t + 0.07);
-
-    const noiseOsc = this.ctx.createOscillator();
-    const noiseGain = this.ctx.createGain();
-    noiseOsc.type = 'sine';
-    noiseOsc.frequency.setValueAtTime(1400 * pitchMultiplier, t);
-    noiseGain.gain.setValueAtTime(volume * 0.3, t);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
-
-    noiseOsc.connect(noiseGain);
-    noiseGain.connect(this.ctx.destination);
-    noiseOsc.start(t);
-    noiseOsc.stop(t + 0.025);
-  }
-
-  public playRollTumble(diceCount: number = 1) {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    const clickCount = 5 + Math.min(diceCount * 2, 8);
-    for (let i = 0; i < clickCount; i++) {
-      const delay = 0.05 + i * (0.05 + Math.random() * 0.04);
-      setTimeout(() => {
-        const pitch = 0.85 + Math.random() * 0.35;
-        const vol = 0.2 + (i / clickCount) * 0.2;
-        this.playDiceBounce(pitch, vol);
-      }, delay * 1000);
-    }
-  }
-
-  public playLandingThud() {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(160, t);
-    osc.frequency.exponentialRampToValueAtTime(60, t + 0.12);
-
-    gain.gain.setValueAtTime(0.4, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
-
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc.start(t);
-    osc.stop(t + 0.15);
-
-    this.playDiceBounce(0.9, 0.5);
-  }
-
-  public playCelebrationChime() {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    const notes = [587.33, 739.99, 880.0, 1174.66];
-    notes.forEach((freq, idx) => {
-      if (!this.ctx) return;
-      const t = this.ctx.currentTime + idx * 0.08;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, t);
-
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.18, t + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(t);
-      osc.stop(t + 0.65);
-    });
-  }
-
-  public playButtonClick() {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(440, t);
-    osc.frequency.exponentialRampToValueAtTime(220, t + 0.04);
-
-    gain.gain.setValueAtTime(0.15, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc.start(t);
-    osc.stop(t + 0.055);
-  }
-}
-
-const diceAudio = new DiceSoundEngine();
-
-/* ==========================================================================
-   3. PASTEL CONFETTI ENGINE
-   ========================================================================== */
-
-interface Particle {
-  x: number;
-  y: number;
-  size: number;
-  color: string;
-  vx: number;
-  vy: number;
-  rotation: number;
-  vRot: number;
-  shape: 'rect' | 'circle' | 'star';
-  life: number;
-  maxLife: number;
-}
-
-const PASTEL_CONFETTI_COLORS = [
-  '#F472B6',
-  '#FB923C',
-  '#FBBF24',
-  '#4ADE80',
-  '#38BDF8',
-  '#A78BFA',
-  '#F43F5E',
-  '#2DD4BF',
-];
-
-function firePastelConfetti(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * window.devicePixelRatio;
-  canvas.height = rect.height * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-  const particles: Particle[] = [];
-  const particleCount = 45;
-
-  const centerX = rect.width / 2;
-  const centerY = rect.height / 2;
-
-  for (let i = 0; i < particleCount; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 2 + Math.random() * 6;
-    particles.push({
-      x: centerX + (Math.random() - 0.5) * 60,
-      y: centerY + (Math.random() - 0.5) * 40,
-      size: 5 + Math.random() * 6,
-      color: PASTEL_CONFETTI_COLORS[Math.floor(Math.random() * PASTEL_CONFETTI_COLORS.length)],
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 2.5,
-      rotation: Math.random() * 360,
-      vRot: (Math.random() - 0.5) * 12,
-      shape: Math.random() > 0.4 ? 'rect' : Math.random() > 0.5 ? 'circle' : 'star',
-      life: 0,
-      maxLife: 60 + Math.random() * 40,
-    });
-  }
-
-  let animId: number;
-
-  function update() {
-    if (!ctx) return;
-    ctx.clearRect(0, 0, rect.width, rect.height);
-
-    let activeParticles = 0;
-
-    for (const p of particles) {
-      p.life++;
-      if (p.life >= p.maxLife) continue;
-      activeParticles++;
-
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += 0.14;
-      p.vx *= 0.98;
-      p.rotation += p.vRot;
-
-      const progress = p.life / p.maxLife;
-      const opacity = progress > 0.7 ? 1 - (progress - 0.7) / 0.3 : 1;
-
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate((p.rotation * Math.PI) / 180);
-      ctx.globalAlpha = Math.max(0, opacity);
-      ctx.fillStyle = p.color;
-
-      if (p.shape === 'rect') {
-        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.7);
-      } else if (p.shape === 'circle') {
-        ctx.beginPath();
-        ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(0, -p.size);
-        ctx.quadraticCurveTo(0, 0, p.size, 0);
-        ctx.quadraticCurveTo(0, 0, 0, p.size);
-        ctx.quadraticCurveTo(0, 0, -p.size, 0);
-        ctx.quadraticCurveTo(0, 0, 0, -p.size);
-        ctx.fill();
-      }
-
-      ctx.restore();
-    }
-
-    if (activeParticles > 0) {
-      animId = requestAnimationFrame(update);
-    } else {
-      ctx.clearRect(0, 0, rect.width, rect.height);
-      cancelAnimationFrame(animId);
-    }
-  }
-
-  animId = requestAnimationFrame(update);
-}
-
-/* ==========================================================================
-   4. DICE FACE SUBCOMPONENT
-   ========================================================================== */
-
-interface DiceFaceProps {
-  value: number;
-  pipColor: string;
-  bgColor: string;
-  borderColor: string;
-  displayStyle?: DisplayStyle;
-}
-
-const DiceFace: React.FC<DiceFaceProps> = ({
-  value,
-  pipColor,
-  bgColor,
-  borderColor,
-  displayStyle = 'pips',
-}) => {
-  if (displayStyle === 'numbers') {
-    return (
-      <div
-        className="w-full h-full flex items-center justify-center font-bold text-4xl select-none"
-        style={{
-          backgroundColor: bgColor,
-          borderColor: borderColor,
-          color: pipColor,
-        }}
-      >
-        {value}
-      </div>
-    );
-  }
-
-  if (displayStyle === 'roman') {
-    return (
-      <div
-        className="w-full h-full flex items-center justify-center font-bold text-3xl tracking-widest select-none"
-        style={{
-          backgroundColor: bgColor,
-          borderColor: borderColor,
-          color: pipColor,
-        }}
-      >
-        {ROMAN_NUMERALS[value] || value}
-      </div>
-    );
-  }
-
-  const renderPips = () => {
-    switch (value) {
-      case 1:
-        return (
-          <div className="w-full h-full flex items-center justify-center">
-            <span
-              className="w-4 h-4 rounded-full shadow-inner"
-              style={{ backgroundColor: pipColor }}
-            />
-          </div>
-        );
-      case 2:
-        return (
-          <div className="w-full h-full p-2.5 flex flex-col justify-between">
-            <div className="flex justify-start">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex justify-end">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-          </div>
-        );
-      case 3:
-        return (
-          <div className="w-full h-full p-2.5 flex flex-col justify-between">
-            <div className="flex justify-start">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex justify-center">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex justify-end">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-          </div>
-        );
-      case 4:
-        return (
-          <div className="w-full h-full p-2.5 flex flex-col justify-between">
-            <div className="flex justify-between">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex justify-between">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-          </div>
-        );
-      case 5:
-        return (
-          <div className="w-full h-full p-2.5 flex flex-col justify-between">
-            <div className="flex justify-between">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex justify-center">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex justify-between">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-          </div>
-        );
-      case 6:
-        return (
-          <div className="w-full h-full p-2.5 flex justify-between">
-            <div className="flex flex-col justify-between">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-            <div className="flex flex-col justify-between">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-inner"
-                style={{ backgroundColor: pipColor }}
-              />
-            </div>
-          </div>
-        );
-      default:
-        return (
-          <div
-            className="w-full h-full flex items-center justify-center font-bold text-2xl"
-            style={{ color: pipColor }}
-          >
-            ?
-          </div>
-        );
-    }
-  };
-
-  return (
-    <div
-      className="w-full h-full select-none"
-      style={{
-        backgroundColor: bgColor,
-      }}
-    >
-      {renderPips()}
-    </div>
-  );
-};
-
-/* ==========================================================================
-   5. 3D ANIMATED DIE SUBCOMPONENT
-   ========================================================================== */
-
-interface AnimatedDie3DProps {
-  id: string;
-  value: number;
-  isRolling: boolean;
-  isLocked: boolean;
-  rotX: number;
-  rotY: number;
-  rotZ: number;
-  bgColor: string;
-  borderColor: string;
-  pipColor: string;
-  shadowColor: string;
-  displayStyle: DisplayStyle;
-  onToggleLock: (id: string) => void;
-  onSingleRoll: (id: string) => void;
-  index: number;
-}
-
-const AnimatedDie3D: React.FC<AnimatedDie3DProps> = ({
-  id,
-  value,
-  isRolling,
-  isLocked,
-  rotX,
-  rotY,
-  rotZ,
-  bgColor,
-  borderColor,
-  pipColor,
-  shadowColor,
-  displayStyle,
-  onToggleLock,
-  onSingleRoll,
-  index,
-}) => {
-  const size = 88;
-  const halfSize = size / 2;
-
-  const faceStyle: React.CSSProperties = {
-    position: 'absolute',
-    width: `${size}px`,
-    height: `${size}px`,
-    borderRadius: '18px',
-    border: `2px solid ${borderColor}`,
-    boxShadow: `
-      inset 0 3px 6px rgba(255, 255, 255, 0.9),
-      inset 0 -3px 6px rgba(0, 0, 0, 0.05),
-      0 0 1px rgba(0, 0, 0, 0.1)
-    `,
-    overflow: 'hidden',
-    backfaceVisibility: 'hidden',
-    WebkitBackfaceVisibility: 'hidden',
-  };
-
-  return (
-    <div className="flex flex-col items-center gap-2 group">
-      <div
-        className="relative cursor-pointer select-none"
-        style={{
-          width: `${size}px`,
-          height: `${size}px`,
-          perspective: '1000px',
-        }}
-        onClick={() => {
-          if (!isRolling) {
-            onSingleRoll(id);
-          }
-        }}
-        title="Kliknutím hodíte touto konkrétní kostkou"
-      >
-        <div
-          className="w-full h-full"
-          style={{
-            transform: isRolling ? 'translateY(-24px) scale(1.08)' : 'translateY(0px) scale(1)',
-            transition: 'transform 0.65s cubic-bezier(0.18, 0.89, 0.32, 1.28)',
-          }}
-        >
-          <div
-            className="w-full h-full relative"
-            style={{
-              transformStyle: 'preserve-3d',
-              WebkitTransformStyle: 'preserve-3d',
-              transform: `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZ}deg)`,
-              transition: isRolling
-                ? 'transform 0.95s cubic-bezier(0.2, 0.9, 0.25, 1.1)'
-                : 'transform 0.35s ease-out',
-            }}
-          >
-            {/* Face 1: Front */}
-            <div style={{ ...faceStyle, transform: `rotateY(0deg) translateZ(${halfSize}px)` }}>
-              <DiceFace
-                value={1}
-                pipColor={pipColor}
-                bgColor={bgColor}
-                borderColor={borderColor}
-                displayStyle={displayStyle}
-              />
-            </div>
-
-            {/* Face 6: Back */}
-            <div style={{ ...faceStyle, transform: `rotateY(180deg) translateZ(${halfSize}px)` }}>
-              <DiceFace
-                value={6}
-                pipColor={pipColor}
-                bgColor={bgColor}
-                borderColor={borderColor}
-                displayStyle={displayStyle}
-              />
-            </div>
-
-            {/* Face 2: Top */}
-            <div style={{ ...faceStyle, transform: `rotateX(90deg) translateZ(${halfSize}px)` }}>
-              <DiceFace
-                value={2}
-                pipColor={pipColor}
-                bgColor={bgColor}
-                borderColor={borderColor}
-                displayStyle={displayStyle}
-              />
-            </div>
-
-            {/* Face 5: Bottom */}
-            <div style={{ ...faceStyle, transform: `rotateX(-90deg) translateZ(${halfSize}px)` }}>
-              <DiceFace
-                value={5}
-                pipColor={pipColor}
-                bgColor={bgColor}
-                borderColor={borderColor}
-                displayStyle={displayStyle}
-              />
-            </div>
-
-            {/* Face 3: Right */}
-            <div style={{ ...faceStyle, transform: `rotateY(90deg) translateZ(${halfSize}px)` }}>
-              <DiceFace
-                value={3}
-                pipColor={pipColor}
-                bgColor={bgColor}
-                borderColor={borderColor}
-                displayStyle={displayStyle}
-              />
-            </div>
-
-            {/* Face 4: Left */}
-            <div style={{ ...faceStyle, transform: `rotateY(-90deg) translateZ(${halfSize}px)` }}>
-              <DiceFace
-                value={4}
-                pipColor={pipColor}
-                bgColor={bgColor}
-                borderColor={borderColor}
-                displayStyle={displayStyle}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Dynamic Cast Floor Shadow */}
-        <div
-          className="absolute -bottom-3 left-1/2 -translate-x-1/2 rounded-full pointer-events-none transition-all duration-700"
-          style={{
-            width: isRolling ? '48px' : '72px',
-            height: isRolling ? '8px' : '14px',
-            backgroundColor: shadowColor,
-            opacity: isRolling ? 0.35 : 0.75,
-            filter: isRolling ? 'blur(6px)' : 'blur(4px)',
-          }}
-        />
-      </div>
-
-      <div className="flex items-center gap-1.5 mt-1">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleLock(id);
-          }}
-          className={`flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-md transition-colors border ${
-            isLocked
-              ? 'bg-amber-100 text-amber-800 border-amber-300 shadow-xs'
-              : 'bg-white/80 hover:bg-white text-slate-500 border-slate-200'
-          }`}
-          title={isLocked ? 'Kostka je zamčená (neháže se)' : 'Zamknout kostku'}
-        >
-          {isLocked ? (
-            <>
-              <Lock className="w-3 h-3 text-amber-700" />
-              <span>Zamčeno</span>
-            </>
-          ) : (
-            <>
-              <Unlock className="w-3 h-3 opacity-60" />
-              <span>#{index + 1}</span>
-            </>
-          )}
-        </button>
-      </div>
-    </div>
-  );
-};
-
-/* ==========================================================================
-   6. HISTORY PANEL SUBCOMPONENT
-   ========================================================================== */
-
-interface HistoryPanelProps {
-  history: RollRecord[];
-  onClearHistory: () => void;
-  accentColor: string;
-}
-
-const HistoryPanel: React.FC<HistoryPanelProps> = ({ history, onClearHistory }) => {
-  return (
-    <div className="bg-white/90 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col h-full">
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-        <div className="flex items-center gap-2">
-          <History className="w-4 h-4 text-slate-500" />
-          <h3 className="font-semibold text-sm text-slate-800">Historie hodů</h3>
-          <span className="text-xs text-slate-400 font-mono">({history.length})</span>
-        </div>
-
-        {history.length > 0 && (
-          <button
-            onClick={onClearHistory}
-            className="flex items-center gap-1 text-xs text-slate-400 hover:text-rose-500 transition-colors px-2 py-1 rounded-md hover:bg-rose-50"
-            title="Smazat historii"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Vymazat</span>
-          </button>
-        )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto max-h-[300px] mt-3 space-y-2 pr-1">
-        {history.length === 0 ? (
-          <div className="h-40 flex flex-col items-center justify-center text-center p-4">
-            <span className="text-2xl mb-1">🎲</span>
-            <p className="text-xs text-slate-400">Zatím žádné hody.</p>
-            <p className="text-[11px] text-slate-400">Klikněte na „Hodit kostkou“ níže.</p>
-          </div>
-        ) : (
-          history.map((record) => (
-            <div
-              key={record.id}
-              className={`p-2.5 rounded-xl border transition-all flex items-center justify-between text-xs ${
-                record.isMax
-                  ? 'bg-amber-50/70 border-amber-200 text-amber-900'
-                  : record.isSame && record.values.length > 1
-                  ? 'bg-purple-50/70 border-purple-200 text-purple-900'
-                  : 'bg-slate-50/70 border-slate-100 text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-slate-400 font-mono">{record.timestamp}</span>
-
-                <div className="flex items-center gap-1">
-                  {record.values.map((v, i) => (
-                    <span
-                      key={i}
-                      className="w-5 h-5 rounded-md bg-white border border-slate-200 shadow-xs flex items-center justify-center font-bold text-[11px] text-slate-700 font-mono"
-                    >
-                      {v}
-                    </span>
-                  ))}
-                </div>
-
-                {record.isMax && (
-                  <span className="flex items-center gap-0.5 text-[10px] text-amber-600 font-medium px-1 py-0.5 rounded bg-amber-100/60">
-                    <Sparkles className="w-2.5 h-2.5" /> Max!
-                  </span>
-                )}
-                {record.isSame && record.values.length > 1 && (
-                  <span className="text-[10px] text-purple-600 font-medium px-1 py-0.5 rounded bg-purple-100/60">
-                    Shoda!
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-1">
-                <span className="text-slate-400 text-[11px]">Součet:</span>
-                <span className="font-bold text-slate-900 font-mono text-sm">{record.sum}</span>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-};
-
-/* ==========================================================================
-   7. STATS PANEL SUBCOMPONENT
-   ========================================================================== */
-
-interface StatsPanelProps {
-  history: RollRecord[];
-}
-
-const StatsPanel: React.FC<StatsPanelProps> = ({ history }) => {
-  const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-  let totalDiceRolled = 0;
-  let totalSum = 0;
-
-  history.forEach((record) => {
-    record.values.forEach((val) => {
-      counts[val] = (counts[val] || 0) + 1;
-      totalDiceRolled++;
-      totalSum += val;
-    });
-  });
-
-  const averageVal = totalDiceRolled > 0 ? (totalSum / totalDiceRolled).toFixed(2) : '0.00';
-  const maxCount = Math.max(...Object.values(counts), 1);
-
-  const barColors = [
-    { num: 1, bar: '#FECDD3', fill: '#F43F5E' },
-    { num: 2, bar: '#FED7AA', fill: '#FB923C' },
-    { num: 3, bar: '#FEF08A', fill: '#EAB308' },
-    { num: 4, bar: '#BBF7D0', fill: '#22C55E' },
-    { num: 5, bar: '#BAE6FD', fill: '#0EA5E9' },
-    { num: 6, bar: '#E9D5FF', fill: '#A855F7' },
-  ];
-
-  return (
-    <div className="bg-white/90 backdrop-blur-sm rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col h-full">
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-        <div className="flex items-center gap-2">
-          <BarChart3 className="w-4 h-4 text-slate-500" />
-          <h3 className="font-semibold text-sm text-slate-800">Statistika čísel</h3>
-        </div>
-        <div className="flex items-center gap-1.5 text-xs text-slate-500 font-mono">
-          <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Ø {averageVal}</span>
-        </div>
-      </div>
-
-      <div className="mt-3 flex-1 flex flex-col justify-between space-y-2">
-        {barColors.map(({ num, bar, fill }) => {
-          const count = counts[num] || 0;
-          const percentage = totalDiceRolled > 0 ? Math.round((count / totalDiceRolled) * 100) : 0;
-          const barWidthPercent =
-            totalDiceRolled > 0 ? Math.max(6, Math.round((count / maxCount) * 100)) : 0;
-
-          return (
-            <div key={num} className="flex items-center gap-2 text-xs">
-              <span className="w-5 font-bold text-slate-700 font-mono text-center">{num}</span>
-
-              <div className="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden p-0.5">
-                <div
-                  className="h-full rounded-full transition-all duration-500"
-                  style={{
-                    width: `${barWidthPercent}%`,
-                    backgroundColor: bar,
-                    borderRight: count > 0 ? `2px solid ${fill}` : 'none',
-                  }}
-                />
-              </div>
-
-              <div className="w-14 text-right flex items-center justify-end gap-1 font-mono text-[11px] text-slate-500">
-                <span className="font-semibold text-slate-800">{count}×</span>
-                <span className="text-[10px] text-slate-400">({percentage}%)</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-        <div className="flex items-center gap-1">
-          <Award className="w-3.5 h-3.5 text-amber-500" />
-          <span>Celkem hozeno kostek:</span>
-        </div>
-        <span className="font-bold font-mono text-slate-800">{totalDiceRolled}</span>
-      </div>
-    </div>
-  );
-};
-
-/* ==========================================================================
-   8. THEME SELECTOR SUBCOMPONENT
-   ========================================================================== */
-
-interface ThemeSelectorProps {
-  currentTheme: PastelPalette;
-  onSelectTheme: (theme: PastelPalette) => void;
-}
-
-const ThemeSelector: React.FC<ThemeSelectorProps> = ({ currentTheme, onSelectTheme }) => {
-  return (
-    <div className="flex items-center gap-1.5 overflow-x-auto py-1 px-1 scrollbar-none">
-      <div className="flex items-center gap-1.5 text-xs text-slate-500 mr-1 shrink-0">
-        <Palette className="w-3.5 h-3.5 text-slate-400" />
-        <span className="hidden sm:inline">Paleta:</span>
-      </div>
-
-      <div className="flex items-center gap-1.5">
-        {PASTEL_THEMES.map((theme) => {
-          const isSelected = currentTheme.id === theme.id;
-          return (
-            <button
-              key={theme.id}
-              onClick={() => onSelectTheme(theme)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all whitespace-nowrap border shrink-0 ${
-                isSelected
-                  ? 'bg-white shadow-xs border-slate-300 text-slate-900 font-semibold ring-1 ring-slate-300'
-                  : 'bg-white/60 hover:bg-white text-slate-600 border-transparent hover:border-slate-200'
-              }`}
-              title={theme.name}
-            >
-              <span
-                className="w-3 h-3 rounded-full border border-black/10 shrink-0"
-                style={{ backgroundColor: theme.diceBorder }}
-              />
-              <span>{theme.name}</span>
-              {isSelected && <Check className="w-3 h-3 text-slate-600" />}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-/* ==========================================================================
-   9. MAIN APPLICATION COMPONENT
-   ========================================================================== */
-
-export default function App() {
-  const [diceCount, setDiceCount] = useState<number>(1);
-  const [displayStyle, setDisplayStyle] = useState<DisplayStyle>('pips');
-  const [currentTheme, setCurrentTheme] = useState<PastelPalette>(PASTEL_THEMES[0]);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isRolling, setIsRolling] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'history' | 'stats'>('history');
-
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  const [dice, setDice] = useState<DieState[]>([
-    {
-      id: 'die-1',
-      value: 6,
-      isLocked: false,
-      rotX: 0,
-      rotY: 180,
-      rotZ: 0,
-    },
-  ]);
-
-  const [history, setHistory] = useState<RollRecord[]>([]);
-
-  useEffect(() => {
-    setDice((prev) => {
-      if (prev.length === diceCount) return prev;
-      if (prev.length < diceCount) {
-        const added: DieState[] = [];
-        for (let i = prev.length; i < diceCount; i++) {
-          const initialVal = (i % 6) + 1;
-          const rot = FACE_ROTATIONS[initialVal];
-          added.push({
-            id: `die-${Date.now()}-${i}`,
-            value: initialVal,
-            isLocked: false,
-            rotX: rot.x,
-            rotY: rot.y,
-            rotZ: 0,
-          });
-        }
-        return [...prev, ...added];
-      } else {
-        return prev.slice(0, diceCount);
-      }
-    });
-  }, [diceCount]);
-
-  const handleRoll = useCallback(
-    (singleDieId?: string) => {
-      if (isRolling) return;
-
-      const diceToRoll = singleDieId
-        ? dice.filter((d) => d.id === singleDieId)
-        : dice.filter((d) => !d.isLocked);
-
-      if (diceToRoll.length === 0) return;
-
-      setIsRolling(true);
-      diceAudio.playRollTumble(diceToRoll.length);
-
-      const newValues: Record<string, number> = {};
-      const newDiceState = dice.map((die) => {
-        const shouldRoll = singleDieId ? die.id === singleDieId : !die.isLocked;
-        if (!shouldRoll) return die;
-
-        const nextVal = Math.floor(Math.random() * 6) + 1;
-        newValues[die.id] = nextVal;
-
-        const spinsX = 2 + Math.floor(Math.random() * 2);
-        const spinsY = 2 + Math.floor(Math.random() * 2);
-        const targetRot = FACE_ROTATIONS[nextVal];
-
-        const nextRotX = Math.round(die.rotX / 360) * 360 + spinsX * 360 + targetRot.x;
-        const nextRotY = Math.round(die.rotY / 360) * 360 + spinsY * 360 + targetRot.y;
-        const nextRotZ = (Math.random() - 0.5) * 16;
-
-        return {
-          ...die,
-          value: nextVal,
-          rotX: nextRotX,
-          rotY: nextRotY,
-          rotZ: nextRotZ,
-        };
-      });
-
-      setDice(newDiceState);
-
-      setTimeout(() => {
-        setIsRolling(false);
-        diceAudio.playLandingThud();
-
-        const finalValues = newDiceState.map((d) => d.value);
-        const sum = finalValues.reduce((acc, v) => acc + v, 0);
-        const maxSum = finalValues.length * 6;
-        const isMax = sum === maxSum || (finalValues.length === 1 && finalValues[0] === 6);
-        const isMin = sum === finalValues.length * 1;
-        const isSame =
-          finalValues.length > 1 && finalValues.every((val) => val === finalValues[0]);
-
-        if (isMax || (isSame && finalValues.length >= 2)) {
-          diceAudio.playCelebrationChime();
-          if (canvasRef.current) {
-            firePastelConfetti(canvasRef.current);
-          }
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pastelová Hrací Kostka</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-page: #F8F9FA;
+            --card-bg: #FFFFFF;
+            --text-main: #1E293B;
+            --text-muted: #64748B;
+            --border-color: #E2E8F0;
+            --dice-size: 88px;
+            --dice-bg: #FFFFFF;
+            --dice-border: #E2E8F0;
+            --pip-color: #334155;
+            --shadow-color: rgba(148, 163, 184, 0.3);
+            --accent: #8B5CF6;
         }
 
-        const now = new Date();
-        const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now
-          .getMinutes()
-          .toString()
-          .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
 
-        setHistory((prev) => [
-          {
-            id: `roll-${Date.now()}`,
-            timestamp: timeStr,
-            values: finalValues,
-            sum,
-            isMax,
-            isMin,
-            isSame,
-          },
-          ...prev.slice(0, 49),
-        ]);
-      }, 950);
-    },
-    [dice, isRolling]
-  );
+        body {
+            font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #FFF5F5 0%, #F0FDF4 50%, #EFF6FF 100%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            transition: background 0.6s ease;
+        }
 
-  const handleToggleLock = (dieId: string) => {
-    diceAudio.playButtonClick();
-    setDice((prev) =>
-      prev.map((d) => (d.id === dieId ? { ...d, isLocked: !d.isLocked } : d))
-    );
-  };
+        h1, h2, h3 { font-family: 'Outfit', sans-serif; }
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && (e.target as HTMLElement).tagName !== 'BUTTON') {
-        e.preventDefault();
-        handleRoll();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRoll]);
+        .app-container {
+            width: 100%;
+            max-width: 900px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
 
-  const handleToggleMute = () => {
-    const newMuted = diceAudio.toggleMute();
-    setIsMuted(newMuted);
-  };
+        header {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            padding: 16px 24px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+        }
 
-  const handleUnlockAll = () => {
-    diceAudio.playButtonClick();
-    setDice((prev) => prev.map((d) => ({ ...d, isLocked: false })));
-  };
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-  const handleReset = () => {
-    diceAudio.playButtonClick();
-    setHistory([]);
-    setDice((prev) =>
-      prev.map((die) => ({
-        ...die,
-        value: 1,
-        isLocked: false,
-        rotX: 0,
-        rotY: 0,
-        rotZ: 0,
-      }))
-    );
-  };
+        .brand h1 {
+            font-size: 1.25rem;
+            color: #0F172A;
+            font-weight: 700;
+        }
 
-  const totalSum = dice.reduce((acc, d) => acc + d.value, 0);
-  const lockedCount = dice.filter((d) => d.isLocked).length;
+        .theme-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            overflow-x: auto;
+            padding: 4px 0;
+        }
 
-  return (
-    <div
-      className={`min-h-screen bg-gradient-to-br ${currentTheme.bgGradient} flex flex-col font-sans transition-colors duration-700 relative`}
-    >
-      <canvas
-        ref={canvasRef}
-        className="fixed inset-0 pointer-events-none z-50 w-full h-full"
-      />
+        .theme-btn {
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
 
-      {/* Top Bar */}
-      <header className="px-6 py-4 border-b border-slate-200/60 bg-white/70 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">🎨</span>
-            <h1 className="text-lg font-bold tracking-tight text-slate-800">
-              Pastelová Hrací Kostka
-            </h1>
-          </div>
+        .theme-btn:hover { background: #fff; color: var(--text-main); }
+        .theme-btn.active {
+            background: #fff;
+            color: #0F172A;
+            border-color: #94A3B8;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+        }
 
-          <div className="hidden md:block">
-            <ThemeSelector
-              currentTheme={currentTheme}
-              onSelectTheme={(t) => {
-                diceAudio.playButtonClick();
-                setCurrentTheme(t);
-              }}
-            />
-          </div>
+        .theme-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleToggleMute}
-              className={`p-2 rounded-xl text-slate-600 transition-colors border ${
-                isMuted
-                  ? 'bg-slate-100 border-slate-200 text-slate-400'
-                  : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 shadow-xs'
-              }`}
-              title={isMuted ? 'Zapnout zvuky' : 'Ztlumit zvuky'}
-            >
-              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </button>
+        .controls-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            padding: 14px 20px;
+            border-radius: 18px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
 
-            <button
-              onClick={handleReset}
-              className="p-2 rounded-xl bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 shadow-xs transition-colors"
-              title="Resetovat kostky a historii"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-          </div>
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .segmented {
+            display: flex;
+            background: #F1F5F9;
+            padding: 3px;
+            border-radius: 12px;
+            gap: 2px;
+        }
+
+        .segmented button {
+            background: transparent;
+            border: none;
+            padding: 5px 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #64748B;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .segmented button.active {
+            background: #FFFFFF;
+            color: #0F172A;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+
+        .table-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 28px;
+            border: 1px solid var(--border-color);
+            padding: 30px;
+            min-height: 380px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+        }
+
+        .table-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: #94A3B8;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #F1F5F9;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10B981;
+            display: inline-block;
+            margin-right: 6px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.15); }
+        }
+
+        .dice-stage {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 32px;
+            padding: 30px 10px;
+        }
+
+        .die-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .scene-3d {
+            width: var(--dice-size);
+            height: var(--dice-size);
+            perspective: 1000px;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .die-jump {
+            width: 100%;
+            height: 100%;
+            transition: transform 0.65s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+        }
+
+        .die-jump.rolling { transform: translateY(-24px) scale(1.08); }
+
+        .cube-3d {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.35s ease-out;
+        }
+
+        .cube-3d.rolling {
+            transition: transform 0.95s cubic-bezier(0.2, 0.9, 0.25, 1.1);
+        }
+
+        .cube-face {
+            position: absolute;
+            width: var(--dice-size);
+            height: var(--dice-size);
+            border-radius: 18px;
+            border: 2px solid var(--dice-border);
+            background: var(--dice-bg);
+            box-shadow:
+                inset 0 3px 6px rgba(255, 255, 255, 0.9),
+                inset 0 -3px 6px rgba(0, 0, 0, 0.05),
+                0 0 1px rgba(0, 0, 0, 0.1);
+            backface-visibility: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+
+        .face-1 { transform: rotateY(0deg) translateZ(calc(var(--dice-size) / 2)); }
+        .face-6 { transform: rotateY(180deg) translateZ(calc(var(--dice-size) / 2)); }
+        .face-2 { transform: rotateX(90deg) translateZ(calc(var(--dice-size) / 2)); }
+        .face-5 { transform: rotateX(-90deg) translateZ(calc(var(--dice-size) / 2)); }
+        .face-3 { transform: rotateY(90deg) translateZ(calc(var(--dice-size) / 2)); }
+        .face-4 { transform: rotateY(-90deg) translateZ(calc(var(--dice-size) / 2)); }
+
+        .die-shadow {
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 70px;
+            height: 12px;
+            background: var(--shadow-color);
+            border-radius: 50%;
+            filter: blur(4px);
+            transition: all 0.7s;
+            pointer-events: none;
+        }
+
+        .die-shadow.rolling {
+            width: 44px;
+            height: 7px;
+            opacity: 0.35;
+            filter: blur(6px);
+        }
+
+        .pip {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--pip-color);
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+            display: inline-block;
+        }
+
+        .pips-container {
+            width: 100%;
+            height: 100%;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .pips-row {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+        }
+
+        .pips-row.center { justify-content: center; }
+
+        .face-text {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--pip-color);
+        }
+
+        .lock-btn {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--border-color);
+            padding: 5px 12px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .lock-btn.locked {
+            background: #FEF3C7;
+            border-color: #FCD34D;
+            color: #92400E;
+        }
+
+        .table-bottom {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 15px;
+            border-top: 1px solid #F1F5F9;
+        }
+
+        .sum-badge {
+            background: #0F172A;
+            color: #FFFFFF;
+            padding: 6px 16px;
+            border-radius: 12px;
+            font-family: monospace;
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .action-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .roll-btn {
+            flex: 2;
+            min-width: 200px;
+            background: #0F172A;
+            color: white;
+            border: none;
+            padding: 16px 28px;
+            border-radius: 20px;
+            font-size: 1.05rem;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.15);
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .roll-btn:hover {
+            background: #1E293B;
+            transform: translateY(-1px);
+        }
+
+        .roll-btn:active { transform: scale(0.98); }
+
+        .shake-btn {
+            flex: 1;
+            min-width: 140px;
+            background: #FFFFFF;
+            color: #334155;
+            border: 1px solid var(--border-color);
+            padding: 16px 20px;
+            border-radius: 20px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .bottom-panels {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 18px;
+        }
+
+        .panel-card {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            padding: 20px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #F1F5F9;
+        }
+
+        .panel-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #0F172A;
+        }
+
+        .history-list {
+            max-height: 220px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: #F8FAFC;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            border: 1px solid #F1F5F9;
+        }
+
+        .dice-mini-pill { display: inline-flex; gap: 4px; }
+
+        .mini-die {
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            border: 1px solid #CBD5E1;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.75rem;
+            font-family: monospace;
+        }
+
+        .stat-bar-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            font-size: 0.8rem;
+        }
+
+        .stat-bar-bg {
+            flex: 1;
+            height: 10px;
+            background: #F1F5F9;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .stat-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 0.4s ease;
+        }
+
+        #confetti-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        footer {
+            margin-top: 20px;
+            font-size: 0.8rem;
+            color: #94A3B8;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="confetti-canvas"></canvas>
+
+    <div class="app-container">
+        <header>
+            <div class="brand">
+                <span style="font-size: 1.5rem;">🎨</span>
+                <h1>Pastelová Hrací Kostka</h1>
+            </div>
+
+            <div class="theme-bar" id="theme-selector"></div>
+
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <button class="lock-btn" id="mute-btn" onclick="toggleMute()" title="Ztlumit / Zapnout zvuky">🔊 Zvuk</button>
+                <button class="lock-btn" onclick="resetAll()" title="Resetovat">↺ Reset</button>
+            </div>
+        </header>
+
+        <div class="controls-card">
+            <div class="control-group">
+                <span>Počet kostek:</span>
+                <div class="segmented" id="count-selector">
+                    <button onclick="setDiceCount(1)" class="active">1</button>
+                    <button onclick="setDiceCount(2)">2</button>
+                    <button onclick="setDiceCount(3)">3</button>
+                    <button onclick="setDiceCount(4)">4</button>
+                    <button onclick="setDiceCount(5)">5</button>
+                    <button onclick="setDiceCount(6)">6</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <span>Vzhled:</span>
+                <div class="segmented" id="style-selector">
+                    <button onclick="setDisplayStyle('pips')" class="active">Tečky</button>
+                    <button onclick="setDisplayStyle('numbers')">Čísla</button>
+                    <button onclick="setDisplayStyle('roman')">Římská</button>
+                </div>
+            </div>
         </div>
 
-        <div className="md:hidden mt-2 pt-2 border-t border-slate-100 overflow-x-auto">
-          <ThemeSelector
-            currentTheme={currentTheme}
-            onSelectTheme={(t) => {
-              diceAudio.playButtonClick();
-              setCurrentTheme(t);
-            }}
-          />
+        <div class="table-card">
+            <div class="table-top">
+                <div><span class="status-dot"></span><span id="status-text">Připraveno k hodu</span></div>
+                <div>Stiskněte <b>Mezerník</b> pro hod</div>
+            </div>
+
+            <div class="dice-stage" id="dice-container"></div>
+
+            <div class="table-bottom">
+                <div style="font-size: 0.85rem; color: #64748B;">
+                    Rozpad: <span id="dice-breakdown" style="font-family: monospace; font-weight: 700; color: #0F172A;">6</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 0.85rem; font-weight: 600; color: #64748B;">Součet:</span>
+                    <div class="sum-badge" id="dice-sum">6</div>
+                </div>
+            </div>
         </div>
-      </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 md:py-8 flex flex-col gap-6">
-        <section className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
-              <Dices className="w-4 h-4 text-slate-400" />
-              <span>Počet kostek:</span>
-            </div>
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
-              {[1, 2, 3, 4, 5, 6].map((num) => (
-                <button
-                  key={num}
-                  disabled={isRolling}
-                  onClick={() => {
-                    diceAudio.playButtonClick();
-                    setDiceCount(num);
-                  }}
-                  className={`w-7 h-7 rounded-lg text-xs font-semibold transition-all ${
-                    diceCount === num
-                      ? 'bg-white text-slate-900 shadow-xs scale-105'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  {num}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-medium hidden sm:inline">Vzhled:</span>
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
-              <button
-                onClick={() => {
-                  diceAudio.playButtonClick();
-                  setDisplayStyle('pips');
-                }}
-                className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-                  displayStyle === 'pips'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Tečky
-              </button>
-              <button
-                onClick={() => {
-                  diceAudio.playButtonClick();
-                  setDisplayStyle('numbers');
-                }}
-                className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-                  displayStyle === 'numbers'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Čísla
-              </button>
-              <button
-                onClick={() => {
-                  diceAudio.playButtonClick();
-                  setDisplayStyle('roman');
-                }}
-                className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-                  displayStyle === 'roman'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Římské
-              </button>
-            </div>
-          </div>
-
-          {lockedCount > 0 && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-amber-800 font-medium">
-                Zamčeno: {lockedCount}/{diceCount}
-              </span>
-              <button
-                onClick={handleUnlockAll}
-                className="text-xs text-slate-500 hover:text-slate-900 underline underline-offset-2 flex items-center gap-1"
-              >
-                <Unlock className="w-3 h-3" /> Odemknout vše
-              </button>
-            </div>
-          )}
-        </section>
-
-        {/* Dice Arena Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          <div className="lg:col-span-2 flex flex-col gap-5">
-            <div className="relative bg-white/95 rounded-3xl p-8 border border-slate-200/90 shadow-sm min-h-[360px] flex flex-col items-center justify-between overflow-hidden">
-              <div className="w-full flex items-center justify-between text-xs text-slate-400 pb-4 border-b border-slate-100">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>Připraveno k hodu</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="hidden sm:inline">Tip: stiskem mezerníku hodíte kostkami</span>
-                  <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-mono text-[10px]">
-                    Space
-                  </span>
-                </div>
-              </div>
-
-              {/* 3D Dice Stage */}
-              <div className="my-auto py-8 w-full flex flex-wrap items-center justify-center gap-8 md:gap-10">
-                {dice.map((die, idx) => {
-                  const palette =
-                    currentTheme.id === 'rainbow'
-                      ? INDIVIDUAL_DICE_PASTELS[idx % INDIVIDUAL_DICE_PASTELS.length]
-                      : {
-                          bg: currentTheme.diceBg,
-                          border: currentTheme.diceBorder,
-                          pip: currentTheme.pipColor,
-                        };
-
-                  return (
-                    <AnimatedDie3D
-                      key={die.id}
-                      id={die.id}
-                      index={idx}
-                      value={die.value}
-                      isRolling={isRolling && !die.isLocked}
-                      isLocked={die.isLocked}
-                      rotX={die.rotX}
-                      rotY={die.rotY}
-                      rotZ={die.rotZ}
-                      bgColor={palette.bg}
-                      borderColor={palette.border}
-                      pipColor={palette.pip}
-                      shadowColor={currentTheme.shadowColor}
-                      displayStyle={displayStyle}
-                      onToggleLock={handleToggleLock}
-                      onSingleRoll={(id) => handleRoll(id)}
-                    />
-                  );
-                })}
-              </div>
-
-              {/* Sum & Roll Result Banner */}
-              <div className="w-full pt-4 border-t border-slate-100 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">Výsledek:</span>
-                  <div className="flex items-center gap-1 font-mono text-xs font-medium text-slate-600">
-                    {dice.map((d, i) => (
-                      <React.Fragment key={d.id}>
-                        <span className={d.isLocked ? 'text-amber-600 font-bold' : ''}>
-                          {d.value}
-                        </span>
-                        {i < dice.length - 1 && <span className="text-slate-300">+</span>}
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-slate-500">Součet:</span>
-                  <div className="px-3 py-1 rounded-xl bg-slate-900 text-white font-mono font-bold text-base shadow-sm">
-                    {totalSum}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Roll Buttons */}
-            <div className="flex flex-col sm:flex-row items-center gap-3">
-              <button
-                type="button"
-                disabled={isRolling}
-                onClick={() => handleRoll()}
-                className={`flex-1 w-full py-4 px-8 rounded-2xl font-bold text-base shadow-md transition-all flex items-center justify-center gap-3 cursor-pointer select-none active:scale-[0.98] ${
-                  isRolling
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
-                    : 'bg-slate-900 hover:bg-slate-800 text-white shadow-slate-900/10 hover:shadow-lg'
-                }`}
-              >
-                <Dices className={`w-5 h-5 ${isRolling ? 'animate-spin' : ''}`} />
-                <span>
-                  {isRolling
-                    ? 'Kostky se kutálejí...'
-                    : lockedCount > 0
-                    ? `Hodit neuzamčenými (${diceCount - lockedCount})`
-                    : 'Hodit kostkou'}
-                </span>
-                {!isRolling && <Sparkles className="w-4 h-4 text-amber-300" />}
-              </button>
-
-              <button
-                type="button"
-                disabled={isRolling}
-                onClick={() => {
-                  diceAudio.playRollTumble(dice.length);
-                  handleRoll();
-                }}
-                className="w-full sm:w-auto py-4 px-6 rounded-2xl font-semibold text-sm bg-white hover:bg-slate-50 text-slate-700 border border-slate-200/90 shadow-xs transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
-                title="Zatřást kelímkem a hodit"
-              >
-                <Shuffle className="w-4 h-4 text-slate-500" />
+        <div class="action-row">
+            <button class="roll-btn" id="roll-button" onclick="hodKostkou()">
+                <span>🎲</span>
+                <span id="roll-text">Hodit kostkou</span>
+                <span>✨</span>
+            </button>
+            <button class="shake-btn" onclick="zatrepatAHodit()">
+                <span>🔀</span>
                 <span>Zatřást & hodit</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Right Column: History & Stats */}
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-1 p-1 bg-white/80 backdrop-blur-sm rounded-xl border border-slate-200/80 shadow-xs">
-              <button
-                onClick={() => setActiveTab('history')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${
-                  activeTab === 'history'
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Historie hodů ({history.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('stats')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition-all ${
-                  activeTab === 'stats'
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Statistika
-              </button>
-            </div>
-
-            {activeTab === 'history' ? (
-              <HistoryPanel
-                history={history}
-                onClearHistory={() => {
-                  diceAudio.playButtonClick();
-                  setHistory([]);
-                }}
-                accentColor={currentTheme.accent}
-              />
-            ) : (
-              <StatsPanel history={history} />
-            )}
-
-            <div className="bg-white/60 rounded-xl p-3.5 border border-slate-200/60 text-xs text-slate-500 flex items-start gap-2.5">
-              <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <p className="font-medium text-slate-700">Jak kostky fungují:</p>
-                <p className="text-[11px] leading-relaxed text-slate-500">
-                  Kliknutím na jednotlivou kostku můžete hodit pouze touto konkrétní kostkou, nebo
-                  použijte tlačítko <span className="font-semibold text-slate-700">Zamčeno</span> pro její podržení.
-                </p>
-              </div>
-            </div>
-          </div>
+            </button>
         </div>
-      </main>
 
-      <footer className="py-5 px-6 border-t border-slate-200/50 text-center text-xs text-slate-400 bg-white/40">
-        <p>Hrací kostka v jemných pastelových tónech · Web Audio syntéza · 3D animace</p>
-      </footer>
+        <div class="bottom-panels">
+            <div class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-title">Historie hodů (<span id="history-count">0</span>)</span>
+                    <button class="lock-btn" onclick="clearHistory()" style="padding: 2px 8px;">Vymazat</button>
+                </div>
+                <div class="history-list" id="history-list"></div>
+            </div>
+
+            <div class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-title">Četnost čísel</span>
+                    <span style="font-size: 0.8rem; font-family: monospace; color: #10B981;" id="stat-avg">Ø 0.00</span>
+                </div>
+                <div id="stats-bars"></div>
+            </div>
+        </div>
+
+        <footer>
+            Jednosouborová pastelová hrací kostka · Web Audio syntéza · 3D animace v čistém HTML/CSS/JS
+        </footer>
     </div>
-  );
-}
+
+    <script>
+        const THEMES = [
+            {
+                id: 'rainbow',
+                name: 'Duhové pastelky',
+                bg: 'linear-gradient(135deg, #FFF5F5 0%, #F0FDF4 50%, #EFF6FF 100%)',
+                diceBg: '#FFFFFF',
+                diceBorder: '#E2E8F0',
+                pipColor: '#334155',
+                shadowColor: 'rgba(148, 163, 184, 0.3)',
+                dot: '#A855F7'
+            },
+            {
+                id: 'rose',
+                name: 'Pudrová růže',
+                bg: 'linear-gradient(135deg, #FFF1F2 0%, #FFE4E6 50%, #FFF5F7 100%)',
+                diceBg: '#FFF1F2',
+                diceBorder: '#FECDD3',
+                pipColor: '#BE123C',
+                shadowColor: 'rgba(251, 113, 133, 0.28)',
+                dot: '#FB7185'
+            },
+            {
+                id: 'mint',
+                name: 'Šalvěj & Máta',
+                bg: 'linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 50%, #F7FEE7 100%)',
+                diceBg: '#F0FDF4',
+                diceBorder: '#BBF7D0',
+                pipColor: '#15803D',
+                shadowColor: 'rgba(74, 222, 128, 0.28)',
+                dot: '#22C55E'
+            },
+            {
+                id: 'lavender',
+                name: 'Něžný šeřík',
+                bg: 'linear-gradient(135deg, #FAF5FF 0%, #F3E8FF 50%, #F5F3FF 100%)',
+                diceBg: '#FAF5FF',
+                diceBorder: '#E9D5FF',
+                pipColor: '#7E22CE',
+                shadowColor: 'rgba(192, 132, 252, 0.28)',
+                dot: '#A855F7'
+            },
+            {
+                id: 'peach',
+                name: 'Broskvový sorbet',
+                bg: 'linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 50%, #FEF3C7 100%)',
+                diceBg: '#FFF7ED',
+                diceBorder: '#FED7AA',
+                pipColor: '#C2410C',
+                shadowColor: 'rgba(251, 146, 60, 0.28)',
+                dot: '#F97316'
+            },
+            {
+                id: 'sky',
+                name: 'Nebeský azur',
+                bg: 'linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 50%, #F0FDFA 100%)',
+                diceBg: '#F0F9FF',
+                diceBorder: '#BAE6FD',
+                pipColor: '#0369A1',
+                shadowColor: 'rgba(56, 189, 248, 0.28)',
+                dot: '#0EA5E9'
+            },
+            {
+                id: 'butter',
+                name: 'Vanilkový krém',
+                bg: 'linear-gradient(135deg, #FEFCE8 0%, #FEF9C3 50%, #FFFBEB 100%)',
+                diceBg: '#FEFCE8',
+                diceBorder: '#FEF08A',
+                pipColor: '#A16207',
+                shadowColor: 'rgba(250, 204, 21, 0.28)',
+                dot: '#EAB308'
+            }
+        ];
+
+        const CRAYON_DICE = [
+            { bg: '#FFF1F2', border: '#FECDD3', pip: '#BE123C' },
+            { bg: '#F0FDF4', border: '#BBF7D0', pip: '#15803D' },
+            { bg: '#FAF5FF', border: '#E9D5FF', pip: '#7E22CE' },
+            { bg: '#FFF7ED', border: '#FED7AA', pip: '#C2410C' },
+            { bg: '#F0F9FF', border: '#BAE6FD', pip: '#0369A1' },
+            { bg: '#FEFCE8', border: '#FEF08A', pip: '#A16207' }
+        ];
+
+        const FACE_ROTS = {
+            1: { x: 0, y: 0 },
+            6: { x: 0, y: 180 },
+            2: { x: -90, y: 0 },
+            5: { x: 90, y: 0 },
+            3: { x: 0, y: -90 },
+            4: { x: 0, y: 90 }
+        };
+
+        const ROMAN = { 1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V', 6: 'VI' };
+
+        let currentTheme = THEMES[0];
+        let diceCount = 1;
+        let displayStyle = 'pips';
+        let isRolling = false;
+        let isMuted = false;
+        let history = [];
+        let dice = [{ id: 1, value: 6, rotX: 0, rotY: 180, rotZ: 0, locked: false }];
+
+        let audioCtx = null;
+        function getAudioCtx() {
+            if (!audioCtx) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (AC) audioCtx = new AC();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            return audioCtx;
+        }
+
+        function playBounceSound(pitch = 1.0, vol = 0.35) {
+            if (isMuted) return;
+            const ctx = getAudioCtx();
+            if (!ctx) return;
+            const t = ctx.currentTime;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            const filter = ctx.createBiquadFilter();
+            const freq = (380 + Math.random() * 120) * pitch;
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, t);
+            osc.frequency.exponentialRampToValueAtTime(freq * 0.4, t + 0.05);
+            filter.type = 'bandpass';
+            filter.frequency.setValueAtTime(freq * 1.5, t);
+            filter.Q.setValueAtTime(3.0, t);
+            gain.gain.setValueAtTime(vol, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(t);
+            osc.stop(t + 0.07);
+        }
+
+        function playTumbleSounds(count = 1) {
+            if (isMuted) return;
+            const clicks = 5 + Math.min(count * 2, 8);
+            for (let i = 0; i < clicks; i++) {
+                setTimeout(() => {
+                    playBounceSound(0.85 + Math.random() * 0.4, 0.2 + (i / clicks) * 0.2);
+                }, (0.05 + i * (0.05 + Math.random() * 0.04)) * 1000);
+            }
+        }
+
+        function playLandingThud() {
+            if (isMuted) return;
+            const ctx = getAudioCtx();
+            if (!ctx) return;
+            const t = ctx.currentTime;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(160, t);
+            osc.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+            gain.gain.setValueAtTime(0.35, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(t);
+            osc.stop(t + 0.15);
+            playBounceSound(0.9, 0.45);
+        }
+
+        function playChime() {
+            if (isMuted) return;
+            const ctx = getAudioCtx();
+            if (!ctx) return;
+            const notes = [587.33, 739.99, 880.0, 1174.66];
+            notes.forEach((freq, idx) => {
+                const t = ctx.currentTime + idx * 0.08;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, t);
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(0.15, t + 0.03);
+                gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(t);
+                osc.stop(t + 0.65);
+            });
+        }
+
+        function toggleMute() {
+            isMuted = !isMuted;
+            document.getElementById('mute-btn').textContent = isMuted ? '🔇 Ztlumeno' : '🔊 Zvuk';
+        }
+
+        function fireConfetti() {
+            const canvas = document.getElementById('confetti-canvas');
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            const colors = ['#F472B6', '#FB923C', '#FBBF24', '#4ADE80', '#38BDF8', '#A78BFA'];
+            const particles = [];
+            for (let i = 0; i < 50; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const spd = 2 + Math.random() * 6;
+                particles.push({
+                    x: canvas.width / 2,
+                    y: canvas.height / 2,
+                    vx: Math.cos(angle) * spd,
+                    vy: Math.sin(angle) * spd - 3,
+                    size: 6 + Math.random() * 6,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    rot: Math.random() * 360,
+                    vRot: (Math.random() - 0.5) * 12,
+                    life: 0,
+                    maxLife: 60 + Math.random() * 40
+                });
+            }
+            function frame() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                let alive = 0;
+                particles.forEach(p => {
+                    p.life++;
+                    if (p.life >= p.maxLife) return;
+                    alive++;
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.vy += 0.14;
+                    p.vx *= 0.98;
+                    p.rot += p.vRot;
+                    const op = p.life / p.maxLife > 0.7 ? 1 - (p.life / p.maxLife - 0.7) / 0.3 : 1;
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(p.rot * Math.PI / 180);
+                    ctx.globalAlpha = Math.max(0, op);
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.7);
+                    ctx.restore();
+                });
+                if (alive > 0) requestAnimationFrame(frame);
+                else ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+            requestAnimationFrame(frame);
+        }
+
+        function getFaceHTML(val) {
+            if (displayStyle === 'numbers') return `<div class="face-text">${val}</div>`;
+            if (displayStyle === 'roman') return `<div class="face-text" style="font-size: 1.8rem;">${ROMAN[val]}</div>`;
+            const pip = `<span class="pip"></span>`;
+            if (val === 1) return `<div class="pips-container" style="justify-content:center; align-items:center;">${pip}</div>`;
+            if (val === 2) return `<div class="pips-container"><div class="pips-row"><div>${pip}</div><div></div></div><div class="pips-row"><div></div><div>${pip}</div></div></div>`;
+            if (val === 3) return `<div class="pips-container"><div class="pips-row"><div>${pip}</div><div></div></div><div class="pips-row center">${pip}</div><div class="pips-row"><div></div><div>${pip}</div></div></div>`;
+            if (val === 4) return `<div class="pips-container"><div class="pips-row">${pip}${pip}</div><div class="pips-row">${pip}${pip}</div></div>`;
+            if (val === 5) return `<div class="pips-container"><div class="pips-row">${pip}${pip}</div><div class="pips-row center">${pip}</div><div class="pips-row">${pip}${pip}</div></div>`;
+            if (val === 6) return `<div class="pips-container"><div class="pips-row">${pip}${pip}</div><div class="pips-row">${pip}${pip}</div><div class="pips-row">${pip}${pip}</div></div>`;
+            return '';
+        }
+
+        function renderDice() {
+            const container = document.getElementById('dice-container');
+            container.innerHTML = '';
+            dice.forEach((d, idx) => {
+                const palette = currentTheme.id === 'rainbow'
+                    ? CRAYON_DICE[idx % CRAYON_DICE.length]
+                    : { bg: currentTheme.diceBg, border: currentTheme.diceBorder, pip: currentTheme.pipColor };
+
+                const wrapper = document.createElement('div');
+                wrapper.className = 'die-wrapper';
+                wrapper.innerHTML = `
+                    <div class="scene-3d" onclick="hodJednouKostkou(${d.id})" title="Kliknutím hodíte touto kostkou">
+                        <div class="die-jump ${isRolling && !d.locked ? 'rolling' : ''}" id="jump-${d.id}">
+                            <div class="cube-3d ${isRolling && !d.locked ? 'rolling' : ''}" id="cube-${d.id}"
+                                 style="transform: rotateX(${d.rotX}deg) rotateY(${d.rotY}deg) rotateZ(${d.rotZ}deg);">
+                                <div class="cube-face face-1" style="background:${palette.bg}; border-color:${palette.border}; --pip-color:${palette.pip};">${getFaceHTML(1)}</div>
+                                <div class="cube-face face-6" style="background:${palette.bg}; border-color:${palette.border}; --pip-color:${palette.pip};">${getFaceHTML(6)}</div>
+                                <div class="cube-face face-2" style="background:${palette.bg}; border-color:${palette.border}; --pip-color:${palette.pip};">${getFaceHTML(2)}</div>
+                                <div class="cube-face face-5" style="background:${palette.bg}; border-color:${palette.border}; --pip-color:${palette.pip};">${getFaceHTML(5)}</div>
+                                <div class="cube-face face-3" style="background:${palette.bg}; border-color:${palette.border}; --pip-color:${palette.pip};">${getFaceHTML(3)}</div>
+                                <div class="cube-face face-4" style="background:${palette.bg}; border-color:${palette.border}; --pip-color:${palette.pip};">${getFaceHTML(4)}</div>
+                            </div>
+                        </div>
+                        <div class="die-shadow ${isRolling && !d.locked ? 'rolling' : ''}"></div>
+                    </div>
+                    <button class="lock-btn ${d.locked ? 'locked' : ''}" onclick="toggleLock(${d.id})">
+                        ${d.locked ? '🔒 Zamčeno' : `🔓 #${idx + 1}`}
+                    </button>
+                `;
+                container.appendChild(wrapper);
+            });
+            updateTotals();
+        }
+
+        function updateTotals() {
+            const sum = dice.reduce((acc, d) => acc + d.value, 0);
+            document.getElementById('dice-sum').textContent = sum;
+            document.getElementById('dice-breakdown').textContent = dice.map(d => d.value).join(' + ') + ` = ${sum}`;
+            const locked = dice.filter(d => d.locked).length;
+            const rollBtnText = document.getElementById('roll-text');
+            if (isRolling) rollBtnText.textContent = 'Kostky se kutálejí...';
+            else if (locked > 0) rollBtnText.textContent = `Hodit zbývajícími (${dice.length - locked})`;
+            else rollBtnText.textContent = 'Hodit kostkou';
+        }
+
+        function hodKostkou(targetDieId = null) {
+            if (isRolling) return;
+            const diceToRoll = targetDieId ? dice.filter(d => d.id === targetDieId) : dice.filter(d => !d.locked);
+            if (diceToRoll.length === 0) return;
+
+            isRolling = true;
+            document.getElementById('status-text').textContent = 'Házím...';
+            playTumbleSounds(diceToRoll.length);
+
+            diceToRoll.forEach(d => {
+                const nextVal = Math.floor(Math.random() * 6) + 1;
+                d.value = nextVal;
+                const spinsX = 2 + Math.floor(Math.random() * 2);
+                const spinsY = 2 + Math.floor(Math.random() * 2);
+                const rot = FACE_ROTS[nextVal];
+                d.rotX = Math.round(d.rotX / 360) * 360 + spinsX * 360 + rot.x;
+                d.rotY = Math.round(d.rotY / 360) * 360 + spinsY * 360 + rot.y;
+                d.rotZ = (Math.random() - 0.5) * 16;
+            });
+
+            renderDice();
+
+            setTimeout(() => {
+                isRolling = false;
+                document.getElementById('status-text').textContent = 'Připraveno k hodu';
+                playLandingThud();
+                const vals = dice.map(d => d.value);
+                const sum = vals.reduce((a, b) => a + b, 0);
+                const isMax = sum === vals.length * 6;
+                const isSame = vals.length > 1 && vals.every(v => v === vals[0]);
+
+                if (isMax || (isSame && vals.length >= 2)) {
+                    playChime();
+                    fireConfetti();
+                }
+
+                const d = new Date();
+                const time = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+                history.unshift({ time, vals: [...vals], sum, isMax, isSame });
+                if (history.length > 40) history.pop();
+
+                renderHistory();
+                renderStats();
+                updateTotals();
+            }, 950);
+        }
+
+        function hodJednouKostkou(id) { if (!isRolling) hodKostkou(id); }
+        function zatrepatAHodit() { playTumbleSounds(dice.length); hodKostkou(); }
+        function toggleLock(id) {
+            const d = dice.find(item => item.id === id);
+            if (d) { d.locked = !d.locked; renderDice(); }
+        }
+
+        function setDiceCount(num) {
+            if (isRolling || num === diceCount) return;
+            diceCount = num;
+            document.querySelectorAll('#count-selector button').forEach((btn, idx) => {
+                btn.className = (idx + 1 === num) ? 'active' : '';
+            });
+            while (dice.length < num) {
+                const nextVal = (dice.length % 6) + 1;
+                const r = FACE_ROTS[nextVal];
+                dice.push({ id: Date.now() + Math.random(), value: nextVal, rotX: r.x, rotY: r.y, rotZ: 0, locked: false });
+            }
+            while (dice.length > num) dice.pop();
+            renderDice();
+        }
+
+        function setDisplayStyle(style) {
+            displayStyle = style;
+            document.querySelectorAll('#style-selector button').forEach(btn => {
+                btn.className = (btn.textContent.toLowerCase().includes(style === 'pips' ? 'tečky' : style === 'numbers' ? 'čísla' : 'římská')) ? 'active' : '';
+            });
+            renderDice();
+        }
+
+        function renderHistory() {
+            const list = document.getElementById('history-list');
+            document.getElementById('history-count').textContent = history.length;
+            if (history.length === 0) {
+                list.innerHTML = `<div style="text-align: center; color: #94A3B8; padding: 30px; font-size: 0.8rem;">Zatím žádné hody.<br>Klikněte na „Hodit kostkou“.</div>`;
+                return;
+            }
+            list.innerHTML = history.map(h => `
+                <div class="history-item">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-family:monospace; color:#94A3B8;">${h.time}</span>
+                        <div class="dice-mini-pill">
+                            ${h.vals.map(v => `<span class="mini-die">${v}</span>`).join('')}
+                        </div>
+                        ${h.isMax ? '<span style="color:#D97706; font-weight:700; font-size:0.75rem;">Max!</span>' : ''}
+                        ${h.isSame ? '<span style="color:#9333EA; font-weight:700; font-size:0.75rem;">Shoda!</span>' : ''}
+                    </div>
+                    <div><b>${h.sum}</b></div>
+                </div>
+            `).join('');
+        }
+
+        function clearHistory() { history = []; renderHistory(); renderStats(); }
+
+        function renderStats() {
+            const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+            let total = 0;
+            let sum = 0;
+            history.forEach(h => {
+                h.vals.forEach(v => { counts[v]++; total++; sum += v; });
+            });
+            const avg = total > 0 ? (sum / total).toFixed(2) : '0.00';
+            document.getElementById('stat-avg').textContent = `Ø ${avg}`;
+            const max = Math.max(...Object.values(counts), 1);
+            const colors = ['#FECDD3', '#FED7AA', '#FEF08A', '#BBF7D0', '#BAE6FD', '#E9D5FF'];
+            const bars = document.getElementById('stats-bars');
+            bars.innerHTML = [1, 2, 3, 4, 5, 6].map(num => {
+                const c = counts[num];
+                const pct = total > 0 ? Math.round((c / total) * 100) : 0;
+                const width = total > 0 ? Math.max(6, Math.round((c / max) * 100)) : 0;
+                return `
+                    <div class="stat-bar-row">
+                        <span style="font-weight:700; width:16px; font-family:monospace;">${num}</span>
+                        <div class="stat-bar-bg">
+                            <div class="stat-bar-fill" style="width:${width}%; background:${colors[num - 1]};"></div>
+                        </div>
+                        <span style="font-family:monospace; color:#64748B; width:55px; text-align:right;">${c}× (${pct}%)</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function resetAll() {
+            history = [];
+            setDiceCount(1);
+            dice[0] = { id: 1, value: 6, rotX: 0, rotY: 180, rotZ: 0, locked: false };
+            renderDice();
+            renderHistory();
+            renderStats();
+        }
+
+        function initThemes() {
+            const bar = document.getElementById('theme-selector');
+            bar.innerHTML = THEMES.map(t => `
+                <button class="theme-btn ${t.id === currentTheme.id ? 'active' : ''}" onclick="selectTheme('${t.id}')">
+                    <span class="theme-dot" style="background:${t.dot};"></span>
+                    <span>${t.name}</span>
+                </button>
+            `).join('');
+        }
+
+        function selectTheme(id) {
+            const found = THEMES.find(t => t.id === id);
+            if (!found) return;
+            currentTheme = found;
+            document.body.style.background = found.bg;
+            document.documentElement.style.setProperty('--dice-bg', found.diceBg);
+            document.documentElement.style.setProperty('--dice-border', found.diceBorder);
+            document.documentElement.style.setProperty('--pip-color', found.pipColor);
+            document.documentElement.style.setProperty('--shadow-color', found.shadowColor);
+            document.documentElement.style.setProperty('--accent', found.dot);
+            initThemes();
+            renderDice();
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && e.target.tagName !== 'BUTTON') {
+                e.preventDefault();
+                hodKostkou();
+            }
+        });
+
+        initThemes();
+        renderDice();
+        renderStats();
+    </script>
+</body>
+</html>
