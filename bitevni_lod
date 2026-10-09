@@ -1,0 +1,962 @@
+import { useState, useEffect, useCallback, useTransition } from 'react';
+import {
+  BoardTheme,
+  Difficulty,
+  GamePhase,
+  Turn,
+  Orientation,
+  PlacedShip,
+  PlacedMine,
+  CellData,
+  BattleLogItem,
+  GameStats,
+  Coordinate,
+  FLEET_CONFIG,
+} from './types/game';
+import {
+  createEmptyGrid,
+  generateRandomFleet,
+  canPlaceShip,
+  canPlaceMine,
+  processShot,
+  processBombStrike,
+  isWithinBounds,
+} from './utils/gameLogic';
+import { battleshipAI } from './utils/ai';
+import { soundManager } from './utils/audio';
+import { Header } from './components/Header';
+import { GameBoard } from './components/GameBoard';
+import { FleetStatus } from './components/FleetStatus';
+import { PlacementControls } from './components/PlacementControls';
+import { BattleLog } from './components/BattleLog';
+import { GameOverModal } from './components/GameOverModal';
+import { GithubPagesModal } from './components/GithubPagesModal';
+import { RulesModal } from './components/RulesModal';
+import { Shield, Sparkles, Crosshair, HelpCircle, GitBranch } from 'lucide-react';
+
+export default function App() {
+  // Theme & Appearance
+  const [isDark, setIsDark] = useState<boolean>(true);
+  const [theme, setTheme] = useState<BoardTheme>('radar');
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [difficulty, setDifficulty] = useState<Difficulty>('medium');
+
+  // Game Phase
+  const [phase, setPhase] = useState<GamePhase>('placement');
+  const [currentTurn, setCurrentTurn] = useState<Turn>('player');
+  const [isAiProcessing, setIsAiProcessing] = useState<boolean>(false);
+
+  // Modals
+  const [isGithubModalOpen, setIsGithubModalOpen] = useState<boolean>(false);
+  const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
+
+  // Tactical Weapons
+  const [tacticalBombs, setTacticalBombs] = useState<number>(2);
+  const [isBombModeActive, setIsBombModeActive] = useState<boolean>(false);
+
+  // Player Grid & Fleet
+  const [playerGrid, setPlayerGrid] = useState<CellData[][]>(() => createEmptyGrid());
+  const [playerShips, setPlayerShips] = useState<PlacedShip[]>([]);
+  const [playerMines, setPlayerMines] = useState<PlacedMine[]>([]);
+
+  // Placement phase state
+  const [selectedShipLength, setSelectedShipLength] = useState<number | null>(4);
+  const [placementOrientation, setPlacementOrientation] = useState<Orientation>('horizontal');
+  const [isPlacingMines, setIsPlacingMines] = useState<boolean>(false);
+  const [placementHoverCoord, setPlacementHoverCoord] = useState<Coordinate | null>(null);
+
+  // Computer Grid & Fleet
+  const [computerGrid, setComputerGrid] = useState<CellData[][]>(() => createEmptyGrid());
+  const [computerShips, setComputerShips] = useState<PlacedShip[]>([]);
+  const [computerMines, setComputerMines] = useState<PlacedMine[]>([]);
+
+  // Last Shot animation indicator
+  const [lastPlayerShot, setLastPlayerShot] = useState<Coordinate | null>(null);
+  const [lastComputerShot, setLastComputerShot] = useState<Coordinate | null>(null);
+
+  // Screen shake animation trigger
+  const [screenShake, setScreenShake] = useState<boolean>(false);
+
+  // Opponent stunned and skipped turn state (when opponent hits a mine)
+  const [aiSkipNextTurn, setAiSkipNextTurn] = useState<boolean>(false);
+  const [aiDisruptedNotice, setAiDisruptedNotice] = useState<boolean>(false);
+
+  // Battle telemetry log
+  const [battleLogs, setBattleLogs] = useState<BattleLogItem[]>([]);
+
+  // Statistics
+  const [stats, setStats] = useState<GameStats>({
+    playerShots: 0,
+    playerHits: 0,
+    computerShots: 0,
+    computerHits: 0,
+    minesDetonated: 0,
+    turnsCount: 0,
+  });
+
+  const COL_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+
+  // Add battle log entry helper
+  const addLog = useCallback(
+    (text: string, type: BattleLogItem['type'] = 'info') => {
+      const time = new Date().toLocaleTimeString('cs-CZ', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      setBattleLogs((prev) => [
+        {
+          id: `log-${Date.now()}-${Math.random()}`,
+          text,
+          type,
+          timestamp: time,
+        },
+        ...prev.slice(0, 40),
+      ]);
+    },
+    []
+  );
+
+  const triggerScreenShake = () => {
+    setScreenShake(true);
+    setTimeout(() => setScreenShake(false), 500);
+  };
+
+  // Initialize or reset placement
+  const handleResetPlacement = useCallback(() => {
+    soundManager.playClick();
+    setPlayerGrid(createEmptyGrid());
+    setPlayerShips([]);
+    setPlayerMines([]);
+    setSelectedShipLength(4);
+    setIsPlacingMines(false);
+  }, []);
+
+  // Randomize player fleet
+  const handleRandomizePlayerFleet = useCallback(() => {
+    soundManager.playClick();
+    const { ships, mines } = generateRandomFleet(true);
+    setPlayerShips(ships);
+    setPlayerMines(mines);
+    setSelectedShipLength(null);
+    setIsPlacingMines(false);
+  }, []);
+
+  // Start new game setup
+  const startNewGame = useCallback(() => {
+    soundManager.playClick();
+    battleshipAI.reset();
+    setPhase('placement');
+    setCurrentTurn('player');
+    setIsAiProcessing(false);
+    setAiSkipNextTurn(false);
+    setAiDisruptedNotice(false);
+    setTacticalBombs(2);
+    setIsBombModeActive(false);
+    setLastPlayerShot(null);
+    setLastComputerShot(null);
+    setBattleLogs([]);
+    setStats({
+      playerShots: 0,
+      playerHits: 0,
+      computerShots: 0,
+      computerHits: 0,
+      minesDetonated: 0,
+      turnsCount: 0,
+    });
+
+    // Auto-prepare computer fleet secretly
+    const compFleet = generateRandomFleet(true);
+    setComputerShips(compFleet.ships);
+    setComputerMines(compFleet.mines);
+    setComputerGrid(createEmptyGrid());
+
+    // Generate fresh player setup
+    handleRandomizePlayerFleet();
+  }, [handleRandomizePlayerFleet]);
+
+  // Initial load
+  useEffect(() => {
+    startNewGame();
+  }, [startNewGame]);
+
+  // Check if current placement hover is valid
+  const isCurrentPlacementValid = (): boolean => {
+    if (!placementHoverCoord) return true;
+    if (isPlacingMines) {
+      return canPlaceMine(
+        playerShips,
+        playerMines,
+        placementHoverCoord.x,
+        placementHoverCoord.y
+      );
+    }
+    if (!selectedShipLength) return true;
+    return canPlaceShip(
+      playerShips,
+      playerMines,
+      placementHoverCoord.x,
+      placementHoverCoord.y,
+      selectedShipLength,
+      placementOrientation,
+      true
+    );
+  };
+
+  // Place ship or mine on player grid during placement phase
+  const handlePlayerCellClickPlacement = (x: number, y: number) => {
+    soundManager.playClick();
+
+    if (isPlacingMines) {
+      if (playerMines.length >= 3) return;
+      if (canPlaceMine(playerShips, playerMines, x, y)) {
+        setPlayerMines((prev) => [
+          ...prev,
+          {
+            id: `mine-${Date.now()}-${prev.length}`,
+            x,
+            y,
+            detonated: false,
+          },
+        ]);
+        if (playerMines.length + 1 >= 3) {
+          setIsPlacingMines(false);
+        }
+      }
+      return;
+    }
+
+    if (!selectedShipLength) return;
+
+    // Check count for this length
+    const cfg = FLEET_CONFIG.find((f) => f.length === selectedShipLength);
+    if (!cfg) return;
+    const currentCount = playerShips.filter((s) => s.length === selectedShipLength).length;
+    if (currentCount >= cfg.totalCount) return;
+
+    if (canPlaceShip(playerShips, playerMines, x, y, selectedShipLength, placementOrientation, true)) {
+      const newShip: PlacedShip = {
+        id: `ship-${Date.now()}-${playerShips.length}`,
+        typeId: cfg.id,
+        name: `${cfg.name} #${currentCount + 1}`,
+        length: selectedShipLength,
+        orientation: placementOrientation,
+        positions: Array.from({ length: selectedShipLength }).map((_, i) => ({
+          x: placementOrientation === 'horizontal' ? x + i : x,
+          y: placementOrientation === 'vertical' ? y + i : y,
+        })),
+        hits: 0,
+        sunk: false,
+        colorName: cfg.colorName,
+        shortCode: cfg.shortCode,
+        badgeBg: cfg.badgeBg,
+        badgeBorder: cfg.badgeBorder,
+        badgeText: cfg.badgeText,
+        shipCellBg: cfg.shipCellBg,
+        shipCellBorder: cfg.shipCellBorder,
+        killedCellBg: cfg.killedCellBg,
+        killedCellBorder: cfg.killedCellBorder,
+      };
+
+      const updatedShips = [...playerShips, newShip];
+      setPlayerShips(updatedShips);
+
+      // Auto-advance to next ship size if this size is complete
+      if (currentCount + 1 >= cfg.totalCount) {
+        const nextIncomplete = FLEET_CONFIG.find((c) => {
+          const cCount = updatedShips.filter((s) => s.length === c.length).length;
+          return cCount < c.totalCount;
+        });
+        if (nextIncomplete) {
+          setSelectedShipLength(nextIncomplete.length);
+        } else {
+          setSelectedShipLength(null);
+          // Auto enable mine placement if not placed yet
+          if (playerMines.length < 3) {
+            setIsPlacingMines(true);
+          }
+        }
+      }
+    }
+  };
+
+  // Confirm fleet placement & Start Battle
+  const handleStartBattle = () => {
+    soundManager.playSonar();
+    setPhase('battle');
+    setCurrentTurn('player');
+    addLog('Rozkazy vydány! Flotila zaujala bojové pozice. Zahaj palbu!', 'info');
+  };
+
+  // Computer's AI Turn
+  const executeComputerTurn = useCallback(() => {
+    if (phase !== 'battle') return;
+
+    setIsAiProcessing(true);
+
+    setTimeout(() => {
+      // AI chooses next shot
+      const shotCoord = battleshipAI.getNextShot(playerGrid, playerShips, difficulty);
+      const coordName = `${COL_LETTERS[shotCoord.x]}${shotCoord.y + 1}`;
+      setLastComputerShot(shotCoord);
+
+      const { newGrid, newShips, newMines, result } = processShot(
+        playerGrid,
+        playerShips,
+        playerMines,
+        shotCoord.x,
+        shotCoord.y,
+        true // Player's ships are 100% immune to mine blasts!
+      );
+
+      setPlayerGrid(newGrid);
+      setPlayerShips(newShips);
+      setPlayerMines(newMines);
+
+      setStats((prev) => ({
+        ...prev,
+        computerShots: prev.computerShots + 1,
+        computerHits: result.hit ? prev.computerHits + 1 : prev.computerHits,
+        minesDetonated: prev.minesDetonated + result.detonatedMines.length,
+      }));
+
+      // Audio & Feedback
+      if (result.isMine) {
+        soundManager.playMineBlast();
+        triggerScreenShake();
+
+        // Disrupt AI's hunting progress and force turn skip!
+        battleshipAI.disruptProgress();
+        setAiSkipNextTurn(true);
+        setAiDisruptedNotice(true);
+        setTimeout(() => setAiDisruptedNotice(false), 5000);
+
+        addLog(
+          `🛑 SOUPEŘ NAJEL NA TVOU MINU! Ztrácí veškerý svůj pokrok v zaměřování a jeho další tah je přeskočen (SKIP)!`,
+          'critical'
+        );
+
+        // Counter-strike: Tvá obranná mina zasáhne flotilu soupeře!
+        let counterX = -1;
+        let counterY = -1;
+        // Prioritize finding an alive enemy ship position that hasn't been hit
+        for (const s of computerShips) {
+          if (!s.sunk) {
+            const unfiredPos = s.positions.find((p) => !computerGrid[p.y][p.x].isHit);
+            if (unfiredPos) {
+              counterX = unfiredPos.x;
+              counterY = unfiredPos.y;
+              break;
+            }
+          }
+        }
+        if (counterX === -1) {
+          for (let cy = 0; cy < 10 && counterX === -1; cy++) {
+            for (let cx = 0; cx < 10 && counterX === -1; cx++) {
+              if (!computerGrid[cy][cx].isHit) {
+                counterX = cx;
+                counterY = cy;
+              }
+            }
+          }
+        }
+
+        if (counterX !== -1) {
+          const counterResult = processShot(
+            computerGrid,
+            computerShips,
+            computerMines,
+            counterX,
+            counterY,
+            false
+          );
+          setComputerGrid(counterResult.newGrid);
+          setComputerShips(counterResult.newShips);
+          setComputerMines(counterResult.newMines);
+
+          addLog(
+            `🛡️ OBRANNÁ MINA! Počítač najel na tvou minu na ${coordName}. Tvé lodě jsou v bezpečí a rázová vlna miny ZASÁHLA soupeřovu loď na ${COL_LETTERS[counterX]}${counterY + 1}!`,
+            'mine'
+          );
+          if (counterResult.result.sunkShip) {
+            addLog(
+              `🔥 Protivýbuchem tvé miny byla potopena nepřátelská loď: [${counterResult.result.sunkShip.colorName || ''}] ${counterResult.result.sunkShip.name}!`,
+              'sink'
+            );
+          }
+          if (counterResult.result.gameOver) {
+            soundManager.playVictory();
+            setPhase('victory');
+            addLog('🏆 VÍTĚZSTVÍ! Výbuch miny dorazil poslední nepřátelskou loď!', 'critical');
+            setIsAiProcessing(false);
+            return;
+          }
+        } else {
+          addLog(
+            `🛡️ Počítač odpálil tvou minu na ${coordName}! Tvé lodě jsou imunní a neutrpěly žádné poškození!`,
+            'mine'
+          );
+        }
+      } else if (result.sunkShip) {
+        soundManager.playSunk();
+        triggerScreenShake();
+        addLog(
+          `☠️ Počítač ZABIL tvou loď [${result.sunkShip.colorName || 'Barevná'}] ${result.sunkShip.name}!`,
+          'sink'
+        );
+      } else if (result.hit) {
+        soundManager.playHit();
+        addLog(`⚠️ Nepřítel zasáhl tvou loď na pozici ${coordName}!`, 'hit');
+      } else {
+        soundManager.playSplash();
+        addLog(`Počítač střílel na ${coordName} - VODA!`, 'miss');
+      }
+
+      // Register hit in AI brain
+      battleshipAI.registerHit(
+        shotCoord.x,
+        shotCoord.y,
+        result.sunkShip !== undefined
+      );
+
+      // Check Game Over
+      if (result.gameOver) {
+        soundManager.playDefeat();
+        setPhase('defeat');
+        setIsAiProcessing(false);
+        addLog('🚨 Všechny tvé lodě byly potopeny! Bitva skončila porážkou.', 'critical');
+        return;
+      }
+
+      // Turn transition: Computer continues on direct ship hit, but passes turn on miss or mine trap
+      if (result.hit && !result.isMine) {
+        // Computer gets another turn on direct ship hit!
+        setTimeout(() => {
+          executeComputerTurn();
+        }, 800);
+      } else {
+        setIsAiProcessing(false);
+        setCurrentTurn('player');
+        setStats((prev) => ({ ...prev, turnsCount: prev.turnsCount + 1 }));
+      }
+    }, 700);
+  }, [
+    phase,
+    playerGrid,
+    playerShips,
+    playerMines,
+    difficulty,
+    addLog,
+    COL_LETTERS,
+  ]);
+
+  // Player Fires at Computer Grid
+  const handlePlayerShoot = (x: number, y: number) => {
+    if (phase !== 'battle') return;
+    if (currentTurn !== 'player' || isAiProcessing) return;
+    if (computerGrid[y][x].isHit) return; // Already shot
+
+    setLastPlayerShot({ x, y });
+    const coordName = `${COL_LETTERS[x]}${y + 1}`;
+
+    // Handle Tactical Bomb Strike (3x3 area raid)
+    if (isBombModeActive && tacticalBombs > 0) {
+      soundManager.playMineBlast();
+      triggerScreenShake();
+      setTacticalBombs((prev) => prev - 1);
+      setIsBombModeActive(false);
+
+      const { newGrid, newShips, newMines, result } = processBombStrike(
+        computerGrid,
+        computerShips,
+        computerMines,
+        x,
+        y
+      );
+
+      setComputerGrid(newGrid);
+      setComputerShips(newShips);
+      setComputerMines(newMines);
+
+      setStats((prev) => ({
+        ...prev,
+        playerShots: prev.playerShots + 9,
+        playerHits: result.hit ? prev.playerHits + 1 : prev.playerHits,
+        minesDetonated: prev.minesDetonated + result.detonatedMines.length,
+      }));
+
+      addLog(`🚀 TAKTICKÝ NÁLET proveden na souřadnice ${coordName}! Plocha 3×3 zasažena!`, 'critical');
+
+      if (result.detonatedMines.length > 0) {
+        addLog(`💥 VÝBUCH MINY v zóně náletu! Sekundární exploze!`, 'mine');
+      }
+
+      if (result.allSunkShips.length > 0) {
+        soundManager.playSunk();
+        result.allSunkShips.forEach((sunk) => {
+          addLog(`🔥 Náletem potopena nepřátelská loď: ${sunk.name}!`, 'sink');
+        });
+      }
+
+      if (result.gameOver) {
+        soundManager.playVictory();
+        setPhase('victory');
+        addLog('🏆 VÍTĚZSTVÍ! Celá nepřátelská flotila byla potopena!', 'critical');
+        return;
+      }
+
+      // After bomb, check if opponent's turn is skipped due to mine stun
+      if (aiSkipNextTurn) {
+        setAiSkipNextTurn(false);
+        addLog('⚡ SOUPEŘ JE OMRÁČEN Z MINY A SKIPNUL SVŮJ TAH! Pokračuješ ve střelbě ty!', 'critical');
+      } else {
+        setCurrentTurn('computer');
+        setTimeout(() => {
+          executeComputerTurn();
+        }, 700);
+      }
+      return;
+    }
+
+    // Normal Single Shot
+    soundManager.playFire();
+
+    const { newGrid, newShips, newMines, result } = processShot(
+      computerGrid,
+      computerShips,
+      computerMines,
+      x,
+      y
+    );
+
+    setComputerGrid(newGrid);
+    setComputerShips(newShips);
+    setComputerMines(newMines);
+
+    setStats((prev) => ({
+      ...prev,
+      playerShots: prev.playerShots + 1,
+      playerHits: result.hit ? prev.playerHits + 1 : prev.playerHits,
+      minesDetonated: prev.minesDetonated + result.detonatedMines.length,
+    }));
+
+    // Audio & Feedback
+    if (result.isMine) {
+      soundManager.playMineBlast();
+      triggerScreenShake();
+      addLog(
+        `💥 ZÁSAH MINY na ${coordName}! Mina detonovala a zničila všech 8 přilehlých polí (3×3 oblast)!`,
+        'mine'
+      );
+    } else if (result.sunkShip) {
+      soundManager.playSunk();
+      triggerScreenShake();
+      addLog(`🎯 POTOPENO! Zničil jsi nepřátelskou loď [${result.sunkShip.colorName || 'Barevná'}] ${result.sunkShip.name}!`, 'sink');
+    } else if (result.hit) {
+      soundManager.playHit();
+      addLog(`🎯 ZÁSAH na pozici ${coordName}! Střílíš znovu!`, 'hit');
+    } else {
+      soundManager.playSplash();
+      addLog(`Výstřel na ${coordName} - Voda.`, 'miss');
+    }
+
+    // Check Win
+    if (result.gameOver) {
+      soundManager.playVictory();
+      setPhase('victory');
+      addLog('🏆 VÍTĚZSTVÍ! Celá nepřátelská flotila byla potopena!', 'critical');
+      return;
+    }
+
+    // Classic Battleship rule: Hit or Mine detonation gives extra turn!
+    if (result.hit || result.isMine) {
+      // Player continues!
+    } else {
+      // Check if opponent's turn is skipped from landing on a mine
+      if (aiSkipNextTurn) {
+        setAiSkipNextTurn(false);
+        addLog('⚡ SOUPEŘ JE OMRÁČEN Z MINY A SKIPNUL SVŮJ TAH! Pokračuješ ve střelbě ty!', 'critical');
+      } else {
+        // Pass turn to Computer
+        setCurrentTurn('computer');
+        setTimeout(() => {
+          executeComputerTurn();
+        }, 700);
+      }
+    }
+  };
+
+  return (
+    <div
+      className={`min-h-screen transition-colors duration-300 flex flex-col font-['Plus_Jakarta_Sans'] ${
+        screenShake ? 'animate-[shake_0.4s_ease-in-out]' : ''
+      } ${
+        isDark
+          ? 'bg-slate-950 text-slate-100'
+          : 'bg-slate-100/90 text-slate-900'
+      }`}
+    >
+      {/* Navigation Header */}
+      <Header
+        isDark={isDark}
+        onToggleThemeMode={() => setIsDark((prev) => !prev)}
+        currentTheme={theme}
+        onChangeTheme={(th) => setTheme(th)}
+        isMuted={isMuted}
+        onToggleMute={() => {
+          const next = !isMuted;
+          setIsMuted(next);
+          soundManager.setMuted(next);
+        }}
+        difficulty={difficulty}
+        onChangeDifficulty={(d) => setDifficulty(d)}
+        onOpenRules={() => setIsRulesModalOpen(true)}
+        onOpenGithub={() => setIsGithubModalOpen(true)}
+        onRestartGame={startNewGame}
+        inGame={phase === 'battle' || phase === 'victory' || phase === 'defeat'}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 flex flex-col gap-5">
+        {/* Placement Phase View */}
+        {phase === 'placement' && (
+          <div className="flex flex-col gap-5 animate-in fade-in duration-300">
+            {/* Placement Controls Panel */}
+            <PlacementControls
+              placedShips={playerShips}
+              placedMines={playerMines}
+              selectedShipLength={selectedShipLength}
+              onSelectShipLength={(l) => setSelectedShipLength(l)}
+              orientation={placementOrientation}
+              onToggleOrientation={() =>
+                setPlacementOrientation((prev) =>
+                  prev === 'horizontal' ? 'vertical' : 'horizontal'
+                )
+              }
+              onRandomizeFleet={handleRandomizePlayerFleet}
+              onResetPlacement={handleResetPlacement}
+              onStartBattle={handleStartBattle}
+              isDark={isDark}
+              isPlacingMines={isPlacingMines}
+              onTogglePlacingMines={() => setIsPlacingMines((prev) => !prev)}
+            />
+
+            {/* Board and Fleet Status Preview */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Player Board for interactive placement */}
+              <div className="lg:col-span-7 flex flex-col items-center">
+                <div className="mb-2 text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-cyan-400" />
+                  <span>Tvá herní plocha (Klikni pro umístění lodě či miny)</span>
+                </div>
+                <GameBoard
+                  grid={playerGrid}
+                  ships={playerShips}
+                  mines={playerMines}
+                  isPlayer={true}
+                  isInteractive={false}
+                  isPlacementPhase={true}
+                  placementShipLength={isPlacingMines ? 1 : selectedShipLength || 1}
+                  placementOrientation={placementOrientation}
+                  isValidPlacement={isCurrentPlacementValid()}
+                  onPlacementHover={(coord) => setPlacementHoverCoord(coord)}
+                  onCellClick={handlePlayerCellClickPlacement}
+                  theme={theme}
+                  isDark={isDark}
+                />
+              </div>
+
+              {/* Status & Rules brief */}
+              <div className="lg:col-span-5 space-y-4">
+                <FleetStatus
+                  title="Tvá flotila k rozmístění"
+                  ships={playerShips}
+                  mines={playerMines}
+                  isDark={isDark}
+                />
+
+                <div
+                  className={`p-4 rounded-2xl border text-xs leading-relaxed ${
+                    isDark
+                      ? 'bg-slate-900/60 border-slate-800 text-slate-300'
+                      : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+                  }`}
+                >
+                  <div className="font-bold text-cyan-500 mb-1 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Pravidla rozestavění:
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-slate-400 text-[11px]">
+                    <li>Lodě se nesmí překrývat ani dotýkat (ani úhlopříčně).</li>
+                    <li>
+                      Potřebuješ: 1x čtyřmístnou, 2x trojmístné, 3x dvojmístné, 4x jednomístné
+                      (celkem 10 lodí).
+                    </li>
+                    <li>Umísti 3 skryté námořní miny (vybuchnou v okruhu 3×3!).</li>
+                    <li>
+                      Tip: Klávesou <kbd className="px-1 py-0.5 rounded bg-slate-700 text-white font-mono text-[10px]">R</kbd>{' '}
+                      rychle otočíš loď.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Battle Phase View */}
+        {(phase === 'battle' || phase === 'victory' || phase === 'defeat') && (
+          <div className="flex flex-col gap-5 animate-in fade-in duration-300">
+            {/* Horizontal Battlefield: Moje pole vlevo, Pole soupeře vpravo po horizontu */}
+            <div className="w-full overflow-x-auto pb-3">
+              <div className="flex flex-row justify-center items-start gap-4 sm:gap-6 lg:gap-8 min-w-[640px] lg:min-w-0 mx-auto">
+                {/* 1. MOJE POLE (Tvá Flotila - Obranná plocha) */}
+                <div className="flex-1 max-w-[450px] flex flex-col items-center">
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between w-full px-2">
+                    <span className="flex items-center gap-1.5 text-cyan-400">
+                      <Shield className="w-4 h-4" />
+                      <span>Moje Flotila (Obranné pole)</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {playerShips.filter((s) => !s.sunk).length}/10 lodí pluje ·{' '}
+                      <span className="text-rose-400 font-bold">
+                        {playerShips.filter((s) => s.sunk).length} zabito
+                      </span>
+                    </span>
+                  </div>
+
+                  <GameBoard
+                    grid={playerGrid}
+                    ships={playerShips}
+                    mines={playerMines}
+                    isPlayer={true}
+                    isInteractive={false}
+                    theme={theme}
+                    isDark={isDark}
+                    lastShotCoord={lastComputerShot}
+                  />
+
+                  {/* Barevný status mých lodí (Zabité vs. Přeživší) přímo pod mým polem */}
+                  <div
+                    className={`mt-3 w-full p-3 rounded-2xl border transition-colors ${
+                      isDark
+                        ? 'bg-slate-900/80 border-slate-800 text-slate-200'
+                        : 'bg-white border-slate-200 text-slate-800 shadow-sm'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-slate-500/20">
+                      <span className="text-xs font-bold font-['Chakra_Petch'] uppercase tracking-wider flex items-center gap-1.5 text-cyan-400">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Barevný stav mých lodí (Odstíny modré)
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {playerShips.filter((s) => s.sunk).length > 0 ? (
+                          <span className="text-rose-400 font-bold">
+                            ⚠️ {playerShips.filter((s) => s.sunk).length} ZABITO
+                          </span>
+                        ) : (
+                          <span className="text-cyan-400 font-bold">
+                            ✓ Všechny lodě plují
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                      {playerShips.map((ship) => {
+                        const isSunk = ship.sunk;
+                        const isDamaged = ship.hits > 0 && !isSunk;
+
+                        return (
+                          <div
+                            key={ship.id}
+                            className={`flex items-center justify-between p-1.5 rounded-lg border transition-all ${
+                              isSunk
+                                ? 'bg-rose-950/60 border-rose-600 text-rose-300 ring-1 ring-rose-500/50 shadow-sm'
+                                : isDamaged
+                                ? 'bg-amber-950/30 border-amber-600/70 text-amber-200'
+                                : isDark
+                                ? 'bg-slate-800/50 border-slate-700/60 text-slate-300'
+                                : 'bg-slate-50 border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 truncate mr-1">
+                              <span
+                                className={`text-[8px] font-black font-mono px-1 py-0.5 rounded border leading-none shrink-0 ${
+                                  ship.badgeBg || 'bg-slate-700 text-white'
+                                }`}
+                              >
+                                {ship.shortCode || 'L'}
+                              </span>
+                              <span
+                                className={`truncate font-medium ${
+                                  isSunk ? 'line-through text-rose-400 font-semibold' : ''
+                                }`}
+                                title={`${ship.name} (${ship.colorName || ''})`}
+                              >
+                                {ship.name}
+                              </span>
+                            </div>
+
+                            <span className="shrink-0 font-mono text-[9px] font-bold">
+                              {isSunk ? (
+                                <span className="text-rose-400 flex items-center gap-0.5 font-black uppercase">
+                                  ☠️ ZABITA
+                                </span>
+                              ) : isDamaged ? (
+                                <span className="text-amber-400">
+                                  ⚠️ {ship.hits}/{ship.length}
+                                </span>
+                              ) : (
+                                <span className="text-emerald-400 font-semibold">
+                                  ⚓ PLUJE
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. POLE SE SOUPEŘEM (Radar soupeře - Cílová útočná plocha) */}
+                <div className="flex-1 max-w-[450px] flex flex-col items-center">
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between w-full px-2">
+                    <span className="flex items-center gap-1.5 text-rose-400">
+                      <Crosshair className="w-4 h-4 animate-spin-slow" />
+                      <span>Pole se soupeřem (Útočný radar)</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {currentTurn === 'player' ? (
+                        <span className="text-cyan-400 font-bold animate-pulse">
+                          TVŮJ TAH: VYSTŘEL!
+                        </span>
+                      ) : (
+                        <span className="text-rose-400 animate-pulse">
+                          ČEKÁ SE NA SOUPEŘE...
+                        </span>
+                      )}
+                    </span>
+                  </div>
+
+                  {aiSkipNextTurn && (
+                    <div className="mb-2 w-full max-w-[450px] p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-bold flex items-center justify-center gap-1.5 animate-pulse text-center">
+                      <span>🛑 SOUPEŘ NAJEL NA MINU! SKIPUJE TAH A ZTRATIL POKROK V ZAMĚŘOVÁNÍ!</span>
+                    </div>
+                  )}
+
+                  <GameBoard
+                    grid={computerGrid}
+                    ships={computerShips}
+                    mines={computerMines}
+                    isPlayer={false}
+                    isInteractive={
+                      currentTurn === 'player' && !isAiProcessing && phase === 'battle'
+                    }
+                    onCellClick={handlePlayerShoot}
+                    isBombMode={isBombModeActive}
+                    theme={theme}
+                    isDark={isDark}
+                    lastShotCoord={lastPlayerShot}
+                    showShipsAlways={phase === 'victory' || phase === 'defeat'}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Section: Fleet Statuses & Battle Log */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Enemy Fleet Health */}
+              <FleetStatus
+                title="Nepřátelská flotila"
+                ships={computerShips}
+                mines={computerMines}
+                isDark={isDark}
+                isEnemy={true}
+              />
+
+              {/* Player Fleet Health */}
+              <FleetStatus
+                title="Stav tvé flotily"
+                ships={playerShips}
+                mines={playerMines}
+                isDark={isDark}
+              />
+
+              {/* Realtime Battle Telemetry Log & Special Weapons */}
+              <BattleLog
+                logs={battleLogs}
+                currentTurn={currentTurn}
+                isDark={isDark}
+                tacticalBombsAvailable={tacticalBombs}
+                isBombModeActive={isBombModeActive}
+                onToggleBombMode={() => {
+                  soundManager.playClick();
+                  setIsBombModeActive((prev) => !prev);
+                }}
+                onSonarPing={() => {
+                  addLog('📡 Akustický radarový signál odeslán přes vodní sloupec.', 'info');
+                }}
+                gameOver={phase === 'victory' || phase === 'defeat'}
+              />
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Footer */}
+      <footer
+        className={`py-4 border-t text-center text-xs transition-colors ${
+          isDark
+            ? 'border-slate-800 text-slate-500 bg-slate-950'
+            : 'border-slate-200 text-slate-600 bg-white'
+        }`}
+      >
+        <div className="max-w-7xl mx-auto px-4 flex flex-wrap items-center justify-between gap-2">
+          <span>Bitevní loď (Battleship) · 4×1, 3×2, 2×3, 1×4 lodě · Výbušné miny & bomby</span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsRulesModalOpen(true)}
+              className="hover:text-cyan-400 transition-colors flex items-center gap-1"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+              <span>Pravidla</span>
+            </button>
+            <span>·</span>
+            <button
+              onClick={() => setIsGithubModalOpen(true)}
+              className="hover:text-cyan-400 transition-colors flex items-center gap-1"
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              <span>GitHub Pages</span>
+            </button>
+          </div>
+        </div>
+      </footer>
+
+      {/* Game Over Modal */}
+      <GameOverModal
+        isOpen={phase === 'victory' || phase === 'defeat'}
+        isVictory={phase === 'victory'}
+        stats={stats}
+        onPlayAgain={startNewGame}
+        isDark={isDark}
+      />
+
+      {/* GitHub Pages Deploy Modal */}
+      <GithubPagesModal
+        isOpen={isGithubModalOpen}
+        onClose={() => setIsGithubModalOpen(false)}
+        isDark={isDark}
+      />
+
+      {/* Rules Modal */}
+      <RulesModal
+        isOpen={isRulesModalOpen}
+        onClose={() => setIsRulesModalOpen(false)}
+        isDark={isDark}
+      />
+    </div>
+  );
+}
